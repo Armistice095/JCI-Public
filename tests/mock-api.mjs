@@ -90,6 +90,17 @@ function handle(req, res, u, cors, raw) {
   }
   const rt = u.pathname.match(/^\/api\/v1\/public\/orders\/([^/]+)\/retry-payment$/);
   if (rt && req.method === 'POST') return json(200, { reference: rt[1], accessToken: 'a'.repeat(32), amountXof: 6000, reservedUntil: new Date(Date.now() + 600000).toISOString(), checkoutUrl: 'https://checkout.fedapay.test/retry/' + rt[1] });
+  if (u.pathname === '/api/v1/public/events' && req.method === 'GET') {
+    const when = u.searchParams.get('when') ?? 'upcoming';
+    const cards = Object.values(FIX).filter((f) => f.status === 'PUBLISHED').map((f) => ({
+      slug: f.slug, title: f.title, category: f.category, accentColor: f.accentColor, startsAt: f.startsAt, endsAt: f.endsAt,
+      venueName: f.venueName, city: f.city, coverUrl: f.posters[0]?.url ?? null, salesStatus: f.salesStatus,
+      priceFromXof: Math.min(...f.categories.map((c) => c.priceXof)), soldOut: f.categories.every((c) => c.availability === 'SOLD_OUT'), updatedAt: '2026-11-01T10:00:00.000Z'
+    }));
+    if (when === 'empty') { res.writeHead(200, { ...cors, 'content-type': 'application/json' }); return res.end(JSON.stringify({ data: [], meta: { page: 1, pageSize: 20, total: 0, totalPages: 0 } })); }
+    res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ data: cards, meta: { page: 1, pageSize: 20, total: cards.length, totalPages: 1 } }));
+  }
   const m = u.pathname.match(/^\/api\/v1\/public\/events\/([^/]+)(\/views)?$/);
   if (m) {
     if (m[2]) { res.writeHead(204, cors); return res.end(); }

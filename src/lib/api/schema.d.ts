@@ -1574,6 +1574,172 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tableau de bord global (KPI, ventes, billets par catégorie, événements proches)
+         * @description Écran « Tableau de bord ». Permission `dashboard.view` (administrateur, président local, organisateur ; **403** sinon, par exemple pour un vendeur ou un agent d'accueil). Il porte sur les événements **que l'utilisateur voit** (`event.read`), **brouillons exclus**.
+         *     Les montants (`kpis.revenueXof`, `sales.points[].revenueXof`, `sales.totalRevenueXof`) ne comptent que les événements où il a `finance.view` ou `order.read` ;
+         *     s'il n'a ce droit sur aucun événement, ils valent `null` : afficher un tiret, pas « 0 ».
+         *     Correspondance avec la maquette :
+         *     - *Recettes confirmées* = `kpis.revenueXof` (commandes **payées**, en ligne et physiques ; une commande remboursée n'est plus comptée).
+         *     - *Taux de remplissage* = `kpis.fillRatePercent` : billets vendus ÷ places (quotas des catégories actives) des événements publiés ou clôturés ; `null` s'il n'y a aucune place.
+         *     - *Billets émis* = `kpis.ticketsIssued` (billets valides ou utilisés) · *Événements* = `kpis.eventsCount` (publiés ou clôturés).
+         *     - Graphique *Ventes* : `sales.points`, un point **par jour du Bénin**, y compris les jours à zéro, du plus ancien au plus récent (aujourd'hui inclus). `range` = 7 ou 30.
+         *     - *Billets par catégorie, tous événements confondus* : `ticketsByCategory` ; les catégories de même nom (sans tenir compte de la casse) sont additionnées ; au-delà de 5, le reste est regroupé dans « Autres ». Les pourcentages sont arrondis, leur somme peut valoir 99 ou 101.
+         *     - *Événements proches* : jusqu'à 5 événements publiés non terminés, du plus proche au plus lointain.
+         *     - *Derniers paiements* : `GET /payments`. *Ventes physiques récentes* : `GET /physical-sales?pageSize=3` (« Voir tout » ouvre la liste complète).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Période du graphique, en jours (boutons « 7 jours » / « 30 jours ») */
+                    range?: "7" | "30";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Dashboard"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                422: components["responses"]["Validation"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkin/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Contrôler un billet à l'entrée (application JCI Stafs)
+         * @description Permission `checkin.scan` **sur l'événement** (administrateur, agent d'accueil assigné à l'événement ; **404** si l'événement est hors périmètre, **403** si l'utilisateur le voit sans pouvoir contrôler).
+         *     Corps : `eventId` + **soit** `qrToken` (dernier segment de l'adresse lue dans le QR code), **soit** `ticketNumber` (saisie manuelle, ex. `JCI-2026-000123`). `deviceId` et `appVersion` sont facultatifs (journal).
+         *     `Idempotency-Key` **obligatoire** : un nouvel UUID par scan, **réutilisé** si la requête est rejouée après une coupure réseau.
+         *
+         *     **Toujours HTTP 200 pour les six résultats** (un billet refusé n'est pas une erreur) ; l'affichage dépend uniquement de `result` :
+         *     - `ADMITTED` : entrée autorisée. Le billet est **marqué utilisé** immédiatement.
+         *     - `ALREADY_USED` : déjà passé ; `firstCheckedInAt` et `firstCheckedInBy` indiquent quand et par qui.
+         *     - `WRONG_EVENT` : billet d'un autre événement ; `ticket.eventTitle` donne celui-ci, mais `holderName` et `category` sont `null`.
+         *     - `CANCELLED` : billet annulé **ou remboursé** ; `reason` donne le motif (« Billet remboursé » ou le motif d'annulation).
+         *     - `EVENT_NOT_ACTIVE` : l'événement n'est pas publié (clôturé ou annulé) ; `reason` l'explique.
+         *     - `INVALID` : aucun billet ne correspond (`ticket` = `null`).
+         *
+         *     **Un billet ne peut être admis qu'une seule fois**, même si deux téléphones le scannent au même instant : la base n'en laisse passer qu'un, l'autre reçoit `ALREADY_USED`.
+         *     Un scan rejoué avec la même `Idempotency-Key` renvoie **le même résultat** sans rien enregistrer de plus (409 `DUPLICATE_REQUEST` si la clé a servi à un autre agent ou un autre événement).
+         *     Tous les scans (réussis ou non) sont journalisés. Cette route n'a **pas** de limite de débit par IP : l'équipe d'accueil partage souvent le même Wi-Fi.
+         *     `counters` est à jour après ce scan et inclut les scans des autres agents.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    /** @description 16 à 80 caractères (un UUID convient) */
+                    "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ScanRequest"];
+                };
+            };
+            responses: {
+                /** @description Résultat du contrôle */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScanResponse"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                422: components["responses"]["Validation"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{eventId}/checkin/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Compteurs d'entrée d'un événement
+         * @description Permission `checkin.view` ou `checkin.scan` sur l'événement (404 hors périmètre, 403 sinon). À appeler à l'ouverture de l'écran de scan, puis toutes les 30 secondes environ
+         *     pour refléter les scans des autres téléphones. `capacity` = **billets à contrôler** (valides ou utilisés), pas la jauge de l'événement : « 342 / 380 entrés ».
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: components["parameters"]["EventId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CheckinStats"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/{eventId}/participants": {
         parameters: {
             query?: never;
@@ -1841,6 +2007,55 @@ export interface paths {
                 429: components["responses"]["RateLimited"];
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Liste des événements publiés (page d'accueil de la billetterie, sitemap.xml)
+         * @description Sans compte. Seuls les événements **publiés** figurent dans la liste : brouillons, **clôturés** et **annulés** en sont exclus (leur page reste consultable par son adresse, `GET /public/events/{slug}`).
+         *     `when` : `upcoming` (par défaut : pas encore terminés, du plus proche au plus lointain), `past` (terminés, du plus récent au plus ancien) ou `all`. Un événement est « à venir » tant que sa fin (à défaut son début) n'est pas passée.
+         *     Pagination classique (`page`, `pageSize` de 1 à 100, 20 par défaut). Pour le **sitemap.xml**, parcourir les pages avec `when=all` jusqu'à `meta.totalPages`.
+         *     `updatedAt` = dernière modification de l'événement : à utiliser pour `<lastmod>`. `priceFromXof` = prix de la catégorie la moins chère (« À partir de 3 000 FCFA »), `null` s'il n'y en a pas ; `soldOut` = toutes les catégories sont épuisées.
+         *     Réponse mise en cache 60 s par un CDN (comme la page d'un événement). Limite : 120 requêtes par minute et par adresse IP (en-tête `Retry-After` sur la réponse 429).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    when?: "upcoming" | "past" | "all";
+                    page?: number;
+                    pageSize?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PublicEventList"];
+                    };
+                };
+                422: components["responses"]["Validation"];
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2313,6 +2528,99 @@ export interface components {
         SalesStatusOrNull: "NOT_OPEN" | "OPEN" | "CLOSED" | null;
         /** @enum {string} */
         CategoryAvailability: "AVAILABLE" | "SOLD_OUT" | "NOT_STARTED" | "ENDED" | "DISABLED";
+        Dashboard: {
+            kpis: {
+                /** @description Recettes confirmées ; null sans droit sur les commandes */
+                revenueXof: number | null;
+                fillRatePercent: number | null;
+                ticketsIssued: number;
+                eventsCount: number;
+            };
+            sales: {
+                /** @enum {integer} */
+                range: 7 | 30;
+                totalRevenueXof: number | null;
+                totalTickets: number;
+                points: {
+                    /**
+                     * Format: date
+                     * @description Jour du Bénin (AAAA-MM-JJ)
+                     */
+                    date: string;
+                    /** @description Recettes du jour ; null sans droit sur les commandes */
+                    revenueXof: number | null;
+                    /** @description Billets émis ce jour-là */
+                    tickets: number;
+                }[];
+            };
+            ticketsByCategory: {
+                /** @description Billets valides ou utilisés (centre du graphique en anneau) */
+                total: number;
+                categories: {
+                    name: string;
+                    count: number;
+                    percent: number;
+                }[];
+            };
+            upcomingEvents: {
+                /** Format: uuid */
+                id: string;
+                title: string;
+                /** Format: date-time */
+                startsAt: string | null;
+                /** Format: uri */
+                coverUrl: string | null;
+                salesStatus: components["schemas"]["SalesStatusOrNull"];
+                /** @description « 142 sur 250 billets émis » */
+                ticketsIssued: number;
+                capacity: number;
+            }[];
+        };
+        /** @description Fournir **exactement un** de `qrToken` ou `ticketNumber`. */
+        ScanRequest: {
+            /** Format: uuid */
+            eventId: string;
+            /** @description Dernier segment de l'adresse du QR code. Un jeton inconnu donne `INVALID`, pas une erreur. */
+            qrToken?: string;
+            /** @example JCI-2026-000123 */
+            ticketNumber?: string;
+            deviceId?: string;
+            appVersion?: string;
+        };
+        ScanResponse: {
+            /** @enum {string} */
+            result: "ADMITTED" | "ALREADY_USED" | "WRONG_EVENT" | "CANCELLED" | "EVENT_NOT_ACTIVE" | "INVALID";
+            ticket: {
+                number: string;
+                eventTitle: string;
+                /** @description null pour WRONG_EVENT */
+                holderName: string | null;
+                /** @description null pour WRONG_EVENT */
+                category: string | null;
+            } | null;
+            /**
+             * Format: date-time
+             * @description Seulement pour ALREADY_USED
+             */
+            firstCheckedInAt: string | null;
+            /** @description Seulement pour ALREADY_USED : nom de l'agent */
+            firstCheckedInBy: string | null;
+            /** @description CANCELLED et EVENT_NOT_ACTIVE */
+            reason: string | null;
+            counters: components["schemas"]["CheckinCounters"];
+        };
+        CheckinCounters: {
+            /** @description Billets déjà admis */
+            admitted: number;
+            /** @description Billets à contrôler (valides ou utilisés) */
+            capacity: number;
+        };
+        CheckinStats: {
+            /** Format: uuid */
+            eventId: string;
+            admitted: number;
+            capacity: number;
+        };
         EventOverview: {
             /** Format: uuid */
             eventId: string;
@@ -2984,6 +3292,38 @@ export interface components {
             /** @description Plafonné à 10 */
             remaining: number;
             maxPerOrder: number;
+        };
+        PublicEventCard: {
+            /** @description Adresse de la page : /evenements/{slug} */
+            slug: string;
+            title: string;
+            category: components["schemas"]["EventCategory"];
+            accentColor: string | null;
+            /** Format: date-time */
+            startsAt: string | null;
+            /** Format: date-time */
+            endsAt: string | null;
+            venueName: string | null;
+            city: string | null;
+            /**
+             * Format: uri
+             * @description Affiche de couverture ; null si l'événement n'en a pas
+             */
+            coverUrl: string | null;
+            salesStatus: components["schemas"]["SalesStatusOrNull"];
+            /** @description Prix de la catégorie active la moins chère */
+            priceFromXof: number | null;
+            /** @description Toutes les catégories actives sont épuisées */
+            soldOut: boolean;
+            /**
+             * Format: date-time
+             * @description Dernière modification : <lastmod> du sitemap
+             */
+            updatedAt: string;
+        };
+        PublicEventList: {
+            data: components["schemas"]["PublicEventCard"][];
+            meta: components["schemas"]["PageMeta"];
         };
         PublicEvent: {
             slug: string;

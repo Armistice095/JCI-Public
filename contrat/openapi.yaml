@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: JCI Comé Labs — API Événements & Billetterie
-  version: 0.7.0
+  version: 0.10.0
   description: |
     **Contrat v0.7.0 — uniquement ce qui est déjà en place côté backend** (50 routes). Les routes à venir sont listées
     dans `docs/GUIDE_FRONTEND.md` (section « Feuille de route »). Ce contrat est vérifié automatiquement contre les
@@ -35,6 +35,8 @@ tags:
   - { name: Événements, description: "Création, publication, affiches" }
   - { name: Billetterie, description: "Fenêtre de vente, catégories de billets, quotas" }
   - { name: Commandes, description: "Paiements, commandes, ventes physiques, annulation de billets (administration)" }
+  - { name: Tableau de bord, description: "Écran d'accueil de l'administration : KPI, ventes, événements proches" }
+  - { name: Contrôle d'accès, description: "Application JCI Stafs : scan des billets à l'entrée et compteurs de présence" }
   - { name: Participants, description: "Liste, recherche, filtres, export et fiche billet d'un participant (onglet « Participants »)" }
   - { name: Billets, description: "Fichiers des billets (PDF, image, visuel de partage) et renvoi par e-mail" }
   - { name: Public, description: "Sans authentification : page publique, achat, suivi de commande" }
@@ -507,6 +509,74 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventOverview' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /dashboard:
+    get:
+      tags: [Tableau de bord]
+      summary: Tableau de bord global (KPI, ventes, billets par catégorie, événements proches)
+      description: |
+        Écran « Tableau de bord ». Permission `dashboard.view` (administrateur, président local, organisateur ; **403** sinon, par exemple pour un vendeur ou un agent d'accueil). Il porte sur les événements **que l'utilisateur voit** (`event.read`), **brouillons exclus**.
+        Les montants (`kpis.revenueXof`, `sales.points[].revenueXof`, `sales.totalRevenueXof`) ne comptent que les événements où il a `finance.view` ou `order.read` ;
+        s'il n'a ce droit sur aucun événement, ils valent `null` : afficher un tiret, pas « 0 ».
+        Correspondance avec la maquette :
+        - *Recettes confirmées* = `kpis.revenueXof` (commandes **payées**, en ligne et physiques ; une commande remboursée n'est plus comptée).
+        - *Taux de remplissage* = `kpis.fillRatePercent` : billets vendus ÷ places (quotas des catégories actives) des événements publiés ou clôturés ; `null` s'il n'y a aucune place.
+        - *Billets émis* = `kpis.ticketsIssued` (billets valides ou utilisés) · *Événements* = `kpis.eventsCount` (publiés ou clôturés).
+        - Graphique *Ventes* : `sales.points`, un point **par jour du Bénin**, y compris les jours à zéro, du plus ancien au plus récent (aujourd'hui inclus). `range` = 7 ou 30.
+        - *Billets par catégorie, tous événements confondus* : `ticketsByCategory` ; les catégories de même nom (sans tenir compte de la casse) sont additionnées ; au-delà de 5, le reste est regroupé dans « Autres ». Les pourcentages sont arrondis, leur somme peut valoir 99 ou 101.
+        - *Événements proches* : jusqu'à 5 événements publiés non terminés, du plus proche au plus lointain.
+        - *Derniers paiements* : `GET /payments`. *Ventes physiques récentes* : `GET /physical-sales?pageSize=3` (« Voir tout » ouvre la liste complète).
+      parameters:
+        - { name: range, in: query, schema: { type: string, enum: ['7', '30'], default: '30' }, description: "Période du graphique, en jours (boutons « 7 jours » / « 30 jours »)" }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /checkin/scan:
+    post:
+      tags: [Contrôle d'accès]
+      summary: Contrôler un billet à l'entrée (application JCI Stafs)
+      description: |
+        Permission `checkin.scan` **sur l'événement** (administrateur, agent d'accueil assigné à l'événement ; **404** si l'événement est hors périmètre, **403** si l'utilisateur le voit sans pouvoir contrôler).
+        Corps : `eventId` + **soit** `qrToken` (dernier segment de l'adresse lue dans le QR code), **soit** `ticketNumber` (saisie manuelle, ex. `JCI-2026-000123`). `deviceId` et `appVersion` sont facultatifs (journal).
+        `Idempotency-Key` **obligatoire** : un nouvel UUID par scan, **réutilisé** si la requête est rejouée après une coupure réseau.
+
+        **Toujours HTTP 200 pour les six résultats** (un billet refusé n'est pas une erreur) ; l'affichage dépend uniquement de `result` :
+        - `ADMITTED` : entrée autorisée. Le billet est **marqué utilisé** immédiatement.
+        - `ALREADY_USED` : déjà passé ; `firstCheckedInAt` et `firstCheckedInBy` indiquent quand et par qui.
+        - `WRONG_EVENT` : billet d'un autre événement ; `ticket.eventTitle` donne celui-ci, mais `holderName` et `category` sont `null`.
+        - `CANCELLED` : billet annulé **ou remboursé** ; `reason` donne le motif (« Billet remboursé » ou le motif d'annulation).
+        - `EVENT_NOT_ACTIVE` : l'événement n'est pas publié (clôturé ou annulé) ; `reason` l'explique.
+        - `INVALID` : aucun billet ne correspond (`ticket` = `null`).
+
+        **Un billet ne peut être admis qu'une seule fois**, même si deux téléphones le scannent au même instant : la base n'en laisse passer qu'un, l'autre reçoit `ALREADY_USED`.
+        Un scan rejoué avec la même `Idempotency-Key` renvoie **le même résultat** sans rien enregistrer de plus (409 `DUPLICATE_REQUEST` si la clé a servi à un autre agent ou un autre événement).
+        Tous les scans (réussis ou non) sont journalisés. Cette route n'a **pas** de limite de débit par IP : l'équipe d'accueil partage souvent le même Wi-Fi.
+        `counters` est à jour après ce scan et inclut les scans des autres agents.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ScanRequest' } } } }
+      responses:
+        '200': { description: Résultat du contrôle, content: { application/json: { schema: { $ref: '#/components/schemas/ScanResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /events/{eventId}/checkin/stats:
+    get:
+      tags: [Contrôle d'accès]
+      summary: Compteurs d'entrée d'un événement
+      description: |
+        Permission `checkin.view` ou `checkin.scan` sur l'événement (404 hors périmètre, 403 sinon). À appeler à l'ouverture de l'écran de scan, puis toutes les 30 secondes environ
+        pour refléter les scans des autres téléphones. `capacity` = **billets à contrôler** (valides ou utilisés), pas la jauge de l'événement : « 342 / 380 entrés ».
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CheckinStats' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /events/{eventId}/participants:
     get:
       tags: [Participants]
@@ -611,6 +681,25 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
 
   # ═══════════════ Public ═══════════════
+  /public/events:
+    get:
+      tags: [Public]
+      summary: Liste des événements publiés (page d'accueil de la billetterie, sitemap.xml)
+      description: |
+        Sans compte. Seuls les événements **publiés** figurent dans la liste : brouillons, **clôturés** et **annulés** en sont exclus (leur page reste consultable par son adresse, `GET /public/events/{slug}`).
+        `when` : `upcoming` (par défaut : pas encore terminés, du plus proche au plus lointain), `past` (terminés, du plus récent au plus ancien) ou `all`. Un événement est « à venir » tant que sa fin (à défaut son début) n'est pas passée.
+        Pagination classique (`page`, `pageSize` de 1 à 100, 20 par défaut). Pour le **sitemap.xml**, parcourir les pages avec `when=all` jusqu'à `meta.totalPages`.
+        `updatedAt` = dernière modification de l'événement : à utiliser pour `<lastmod>`. `priceFromXof` = prix de la catégorie la moins chère (« À partir de 3 000 FCFA »), `null` s'il n'y en a pas ; `soldOut` = toutes les catégories sont épuisées.
+        Réponse mise en cache 60 s par un CDN (comme la page d'un événement). Limite : 120 requêtes par minute et par adresse IP (en-tête `Retry-After` sur la réponse 429).
+      parameters:
+        - { name: when, in: query, schema: { type: string, enum: [upcoming, past, all], default: upcoming } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicEventList' } } } }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
   /public/events/{slug}:
     get:
       tags: [Public]
@@ -805,6 +894,102 @@ components:
     SalesStatus: { type: string, enum: [NOT_OPEN, OPEN, CLOSED], description: "Statut de la billetterie (distinct du statut de publication). Calculé par le serveur." }
     SalesStatusOrNull: { type: string, nullable: true, enum: [NOT_OPEN, OPEN, CLOSED, null], description: "null pour un brouillon" }
     CategoryAvailability: { type: string, enum: [AVAILABLE, SOLD_OUT, NOT_STARTED, ENDED, DISABLED] }
+    Dashboard:
+      type: object
+      required: [kpis, sales, ticketsByCategory, upcomingEvents]
+      properties:
+        kpis:
+          type: object
+          required: [revenueXof, fillRatePercent, ticketsIssued, eventsCount]
+          properties:
+            revenueXof: { type: integer, nullable: true, description: "Recettes confirmées ; null sans droit sur les commandes" }
+            fillRatePercent: { type: integer, nullable: true, minimum: 0, maximum: 100 }
+            ticketsIssued: { type: integer }
+            eventsCount: { type: integer }
+        sales:
+          type: object
+          required: [range, points, totalRevenueXof, totalTickets]
+          properties:
+            range: { type: integer, enum: [7, 30] }
+            totalRevenueXof: { type: integer, nullable: true }
+            totalTickets: { type: integer }
+            points:
+              type: array
+              items:
+                type: object
+                required: [date, revenueXof, tickets]
+                properties:
+                  date: { type: string, format: date, description: "Jour du Bénin (AAAA-MM-JJ)" }
+                  revenueXof: { type: integer, nullable: true, description: "Recettes du jour ; null sans droit sur les commandes" }
+                  tickets: { type: integer, description: "Billets émis ce jour-là" }
+        ticketsByCategory:
+          type: object
+          required: [total, categories]
+          properties:
+            total: { type: integer, description: "Billets valides ou utilisés (centre du graphique en anneau)" }
+            categories:
+              type: array
+              items:
+                type: object
+                required: [name, count, percent]
+                properties:
+                  name: { type: string }
+                  count: { type: integer }
+                  percent: { type: integer }
+        upcomingEvents:
+          type: array
+          items:
+            type: object
+            required: [id, title, startsAt, coverUrl, salesStatus, ticketsIssued, capacity]
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              startsAt: { type: string, format: date-time, nullable: true }
+              coverUrl: { type: string, format: uri, nullable: true }
+              salesStatus: { $ref: '#/components/schemas/SalesStatusOrNull' }
+              ticketsIssued: { type: integer, description: "« 142 sur 250 billets émis »" }
+              capacity: { type: integer }
+    ScanRequest:
+      type: object
+      required: [eventId]
+      description: Fournir **exactement un** de `qrToken` ou `ticketNumber`.
+      properties:
+        eventId: { type: string, format: uuid }
+        qrToken: { type: string, maxLength: 200, description: "Dernier segment de l'adresse du QR code. Un jeton inconnu donne `INVALID`, pas une erreur." }
+        ticketNumber: { type: string, maxLength: 40, example: JCI-2026-000123 }
+        deviceId: { type: string, maxLength: 100 }
+        appVersion: { type: string, maxLength: 30 }
+    ScanResponse:
+      type: object
+      required: [result, ticket, firstCheckedInAt, firstCheckedInBy, reason, counters]
+      properties:
+        result: { type: string, enum: [ADMITTED, ALREADY_USED, WRONG_EVENT, CANCELLED, EVENT_NOT_ACTIVE, INVALID] }
+        ticket:
+          type: object
+          nullable: true
+          required: [number, eventTitle, holderName, category]
+          properties:
+            number: { type: string }
+            eventTitle: { type: string }
+            holderName: { type: string, nullable: true, description: "null pour WRONG_EVENT" }
+            category: { type: string, nullable: true, description: "null pour WRONG_EVENT" }
+        firstCheckedInAt: { type: string, format: date-time, nullable: true, description: "Seulement pour ALREADY_USED" }
+        firstCheckedInBy: { type: string, nullable: true, description: "Seulement pour ALREADY_USED : nom de l'agent" }
+        reason: { type: string, nullable: true, description: "CANCELLED et EVENT_NOT_ACTIVE" }
+        counters: { $ref: '#/components/schemas/CheckinCounters' }
+    CheckinCounters:
+      type: object
+      required: [admitted, capacity]
+      properties:
+        admitted: { type: integer, description: "Billets déjà admis" }
+        capacity: { type: integer, description: "Billets à contrôler (valides ou utilisés)" }
+    CheckinStats:
+      type: object
+      required: [eventId, admitted, capacity]
+      properties:
+        eventId: { type: string, format: uuid }
+        admitted: { type: integer }
+        capacity: { type: integer }
     EventOverview:
       type: object
       required: [eventId, kpis, categories, activity]
@@ -1358,6 +1543,29 @@ components:
         availability: { $ref: '#/components/schemas/CategoryAvailability' }
         remaining: { type: integer, maximum: 10, description: Plafonné à 10 }
         maxPerOrder: { type: integer }
+    PublicEventCard:
+      type: object
+      required: [slug, title, category, accentColor, startsAt, endsAt, venueName, city, coverUrl, salesStatus, priceFromXof, soldOut, updatedAt]
+      properties:
+        slug: { type: string, description: "Adresse de la page : /evenements/{slug}" }
+        title: { type: string }
+        category: { $ref: '#/components/schemas/EventCategory' }
+        accentColor: { type: string, nullable: true }
+        startsAt: { type: string, format: date-time, nullable: true }
+        endsAt: { type: string, format: date-time, nullable: true }
+        venueName: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        coverUrl: { type: string, format: uri, nullable: true, description: "Affiche de couverture ; null si l'événement n'en a pas" }
+        salesStatus: { $ref: '#/components/schemas/SalesStatusOrNull' }
+        priceFromXof: { type: integer, nullable: true, description: "Prix de la catégorie active la moins chère" }
+        soldOut: { type: boolean, description: "Toutes les catégories actives sont épuisées" }
+        updatedAt: { type: string, format: date-time, description: "Dernière modification : <lastmod> du sitemap" }
+    PublicEventList:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/PublicEventCard' } }
+        meta: { $ref: '#/components/schemas/PageMeta' }
     PublicEvent:
       type: object
       required: [slug, title, category, accentColor, description, status, salesStatus, startsAt, endsAt, venueName, city, posters, programme, organizers, categories, maxPerOrder, contactEmail, contactPhone, practicalInfo, ticketTerms, refundPolicy, infoSources, faq, og]

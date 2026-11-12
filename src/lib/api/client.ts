@@ -28,3 +28,4 @@ export async function unwrap<T>(
 }
 
 export { ApiError };
+export type PublicEventCard = Schemas['PublicEventCard'];

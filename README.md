@@ -92,11 +92,13 @@ Plan d'adresses : `jcicomee.org` (+ `www` redirigé) = site vitrine · `billets.
 - FedaPay : passer en clés de production ; Brevo : authentifier le domaine (SPF/DKIM/DMARC dans la zone DNS).
 
 ### SEO / sécurité intégrés
-Balises Open Graph + Twitter, `canonical`, JSON-LD `schema.org/Event`, image de partage par défaut (`/og-default.png`), favicons, `robots.txt` ; pages tunnel et commande en `noindex` (en-tête + balise) ; HSTS, Permissions-Policy, Referrer-Policy, CSP bâtie depuis `PUBLIC_API_URL`. `/` renvoie (302) vers `PUBLIC_SITE_URL`.
+Balises Open Graph + Twitter, `canonical`, JSON-LD `schema.org/Event`, image de partage par défaut (`/og-default.png`), favicons, `robots.txt` et `sitemap.xml` générés (liste `GET /public/events?when=all`, `lastmod` = `updatedAt`, cache 5 min) ; pages tunnel et commande en `noindex` (en-tête + balise) ; HSTS, Permissions-Policy, Referrer-Policy, CSP bâtie depuis `PUBLIC_API_URL`. `/` est la page d'accueil de la billetterie (événements à venir, `GET /public/events`, cache 60 s, pagination `?page=`) ; son pied de page renvoie vers `PUBLIC_SITE_URL`.
+
+**Google** : ajouter `billets.jcicomee.org` dans Search Console (propriété « Domaine », validation DNS) puis soumettre `https://billets.jcicomee.org/sitemap.xml`.
 Les pages événement sont mises en cache 60 s par le cache Cloudflare (`s-maxage=60`) et par le Worker.
 
 ### Tester en local sous le runtime Cloudflare
-`npm run preview` (build + `wrangler dev`). Tests : `BASE=http://localhost:8787 NO_PROXY=127.0.0.1,localhost node tests/e2e.mjs` (idem `e2e-achat.mjs`, `e2e-retour.mjs`) avec `node tests/mock-api.mjs` lancé. Supprimer `.wrangler/` entre deux builds (cache local).
+`npm run preview` (build + `wrangler dev`). Tests : `BASE=http://localhost:8787 NO_PROXY=127.0.0.1,localhost node tests/e2e.mjs` (idem `e2e-achat.mjs`, `e2e-retour.mjs`, `e2e-accueil.mjs`) avec `node tests/mock-api.mjs` lancé. Supprimer `.wrangler/` entre deux builds (cache local).
 
 ## Tests
 
