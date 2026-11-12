@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+src/lib/api/schema.d.ts linguist-generated

@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jci-billetterie",
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".svelte-kit/cloudflare"
+  },
+  "routes": [
+    { "pattern": "billets.jcicomee.org", "custom_domain": true }
+  ],
+  "observability": { "enabled": true },
+  // Variables publiques (non secrètes). Elles sont lues À LA CONSTRUCTION ET À L'EXÉCUTION :
+  // à renseigner aussi dans Cloudflare > Workers > Settings > Variables and Secrets > « Build ».
+  "vars": {
+    "PUBLIC_API_URL": "https://api.jcicomee.org",
+    "PUBLIC_TURNSTILE_SITE_KEY": "",
+    "PUBLIC_SITE_URL": "https://jcicomee.org"
+  }
+}

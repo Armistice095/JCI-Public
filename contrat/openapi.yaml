@@ -1,0 +1,1455 @@
+openapi: 3.0.3
+info:
+  title: JCI Comé Labs — API Événements & Billetterie
+  version: 0.7.0
+  description: |
+    **Contrat v0.7.0 — uniquement ce qui est déjà en place côté backend** (50 routes). Les routes à venir sont listées
+    dans `docs/GUIDE_FRONTEND.md` (section « Feuille de route »). Ce contrat est vérifié automatiquement contre les
+    vraies réponses de l'API (tests `contract`) : en cas d'écart, c'est le backend qui est corrigé.
+
+    ### Conventions
+    - **Base URL** : `{serveur}/api/v1`. Tout est en JSON, sauf l'envoi d'affiches (`multipart/form-data`).
+    - **Authentification** : jeton d'accès Supabase Auth dans `Authorization: Bearer <jwt>`. La connexion, le mot de passe oublié
+      et le rafraîchissement du jeton se font **directement avec le SDK Supabase**, pas avec cette API.
+    - **Montants** : entiers en XOF. **Dates** : ISO 8601 en UTC (`2026-11-28T07:00:00.000Z`) ; l'affichage se fait en heure du Bénin
+      (Africa/Porto-Novo, UTC+1). Les champs de formulaire `date` (`AAAA-MM-JJ`), `startTime`/`endTime` (`HH:mm`) sont en **heure locale**.
+    - **Téléphones** : à l'envoi, `0195789513`, `+229 01 95 78 95 13` ou `95789513` sont acceptés ; l'API renvoie la forme E.164 (`+2290195789513`).
+    - **Pagination** : `?page=1&pageSize=10` (max 100). Réponse `{ data, meta: { page, pageSize, total, totalPages, … } }`.
+    - **Erreurs** : toujours `{ code, message, details? }`. Se baser sur `code` (stable), afficher `message` (français). Pour les erreurs de
+      formulaire (422) : `details.fields = { "<champ>": "<message>" }` (ex. `tickets.0.email`).
+    - **Droits** : `GET /me` renvoie les permissions. Les afficher/masquer côté interface est un confort ; **le serveur reste seul juge** (403).
+      Un événement hors du périmètre de l'utilisateur répond **404** (pas 403).
+    - **Idempotence** : l'en-tête `Idempotency-Key` (16 à 80 caractères, un UUID convient) est **obligatoire** pour créer une commande publique
+      et une vente physique. Rejouer la même requête avec la même clé ne crée rien de nouveau et renvoie le même résultat.
+    - **Limitation de débit** : certaines routes publiques répondent `429` avec l'en-tête `Retry-After` (secondes).
+  contact:
+    name: Équipe backend JCI Comé Labs
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Développement local
+  - url: https://api.example.org/api/v1
+    description: Production (URL à définir)
+tags:
+  - { name: Compte, description: "Profil et droits de l'utilisateur connecté" }
+  - { name: Utilisateurs, description: "Réservé aux administrateurs (permission user.manage / role.manage)" }
+  - { name: Événements, description: "Création, publication, affiches" }
+  - { name: Billetterie, description: "Fenêtre de vente, catégories de billets, quotas" }
+  - { name: Commandes, description: "Paiements, commandes, ventes physiques, annulation de billets (administration)" }
+  - { name: Participants, description: "Liste, recherche, filtres, export et fiche billet d'un participant (onglet « Participants »)" }
+  - { name: Billets, description: "Fichiers des billets (PDF, image, visuel de partage) et renvoi par e-mail" }
+  - { name: Public, description: "Sans authentification : page publique, achat, suivi de commande" }
+  - { name: Interne, description: "Ne pas appeler depuis une interface" }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Interne]
+      summary: Vérification de santé (base de données comprise)
+      security: []
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [ok] } } } } } }
+        '503': { description: Base de données indisponible }
+
+  # ═══════════════ Compte ═══════════════
+  /me:
+    get:
+      tags: [Compte]
+      summary: Profil, rôles et permissions de l'utilisateur connecté
+      description: |
+        À appeler après la connexion. `permissions` = permissions des rôles **globaux**. `eventPermissions` = permissions supplémentaires
+        sur des événements précis (ex. agent d'accueil assigné à un événement).
+        Un compte Supabase sans profil JCI Comé Labs, ou désactivé, reçoit **403**.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ═══════════════ Utilisateurs ═══════════════
+  /roles:
+    get:
+      tags: [Utilisateurs]
+      summary: Rôles et leurs permissions (permission user.manage)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Role' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /users:
+    get:
+      tags: [Utilisateurs]
+      summary: Liste des utilisateurs (permission user.manage)
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: q, in: query, description: "Recherche sur nom, prénom ou e-mail", schema: { type: string, maxLength: 100 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/UserPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Utilisateurs]
+      summary: Créer un compte (invitation par e-mail)
+      description: |
+        Crée le compte Supabase et le profil, attribue les rôles, et envoie à l'utilisateur un e-mail d'invitation. Le lien de l'e-mail ouvre
+        `{ADMIN_WEB_URL}/definir-mot-de-passe` : **cette page doit exister côté admin** (voir le guide).
+        Un rôle `ADMIN` ou `PRESIDENT` ne peut pas être limité à un événement ; les autres rôles le peuvent (`eventId`).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UserCreate' } } } }
+      responses:
+        '201': { description: Créé, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /users/{userId}:
+    parameters: [ { $ref: '#/components/parameters/UserId' } ]
+    get:
+      tags: [Utilisateurs]
+      summary: Détail d'un utilisateur
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Utilisateurs]
+      summary: Modifier nom, prénom, téléphone
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UserUpdate' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /users/{userId}/disable:
+    post:
+      tags: [Utilisateurs]
+      summary: Désactiver un compte
+      description: Interdit sur son propre compte et sur le dernier administrateur actif (409 `INVALID_STATE`). Les sessions de l'utilisateur sont invalidées.
+      parameters: [ { $ref: '#/components/parameters/UserId' } ]
+      responses:
+        '204': { description: Désactivé }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /users/{userId}/enable:
+    post:
+      tags: [Utilisateurs]
+      summary: Réactiver un compte
+      parameters: [ { $ref: '#/components/parameters/UserId' } ]
+      responses:
+        '204': { description: Réactivé }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /users/{userId}/reset-password:
+    post:
+      tags: [Utilisateurs]
+      summary: Envoyer un e-mail de réinitialisation du mot de passe
+      parameters: [ { $ref: '#/components/parameters/UserId' } ]
+      responses:
+        '204': { description: Envoyé }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /users/{userId}/roles:
+    post:
+      tags: [Utilisateurs]
+      summary: Attribuer un rôle (permission role.manage)
+      parameters: [ { $ref: '#/components/parameters/UserId' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RoleGrantInput' } } } }
+      responses:
+        '201': { description: Attribué, content: { application/json: { schema: { $ref: '#/components/schemas/RoleGrant' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /users/{userId}/roles/{grantId}:
+    delete:
+      tags: [Utilisateurs]
+      summary: Retirer un rôle (impossible pour le dernier administrateur)
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+        - { name: grantId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Retiré }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ═══════════════ Événements ═══════════════
+  /events:
+    get:
+      tags: [Événements]
+      summary: Liste des événements (vue tableau ou cartes)
+      description: Limitée aux événements du périmètre de l'utilisateur. `meta.statusCounts` alimente les onglets Tous / Brouillon / Publié / Clôturé / Annulé.
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/EventStatus' } }
+        - { name: sales, in: query, description: Filtre « Billetterie », schema: { type: string, enum: [open, not_open, closed] } }
+        - { name: q, in: query, description: Titre ou lieu, schema: { type: string, maxLength: 100 } }
+        - { name: sort, in: query, description: "Tri (défaut `-startsAt` = date décroissante ; préfixe `-` = décroissant). Les événements sans date sont en dernier.", schema: { type: string, enum: [startsAt, -startsAt, createdAt, -createdAt], default: -startsAt } }
+        - { name: upcoming, in: query, description: "`true` = uniquement les événements dont la date n'est pas passée (widget « Événements proches » : `status=PUBLISHED&upcoming=true&sort=startsAt`)", schema: { type: string, enum: ['true', 'false'] } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+    post:
+      tags: [Événements]
+      summary: Créer un événement (brouillon ou publication directe)
+      description: |
+        Écran « Nouvel événement ». Seul `title` est obligatoire : un brouillon peut être incomplet. `publish: true` correspond au bouton **Publier**
+        (permission `event.publish`, sinon 403) et exige alors titre, description, date, horaires, lieu et ville (422 avec `details.fields` sinon).
+        Le `slug` (adresse publique) est généré automatiquement et ne change plus.
+        Si `ticketing.salesClosesAt` est absent et que `date` est fournie, la clôture de la billetterie est fixée à **la veille à 18h00**.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EventCreate' } } } }
+      responses:
+        '201': { description: Créé, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}:
+    parameters: [ { $ref: '#/components/parameters/EventId' } ]
+    get:
+      tags: [Événements]
+      summary: Fiche d'un événement (en-tête + onglet Informations)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Événements]
+      summary: Modifier les informations
+      description: |
+        Mise à jour partielle. `programme` et `organizers`, s'ils sont fournis, **remplacent** la liste entière. Les catégories de billets se gèrent
+        via `/events/{eventId}/categories`. Refusé (409 `INVALID_STATE`) pour un événement clôturé ou annulé. Sur un événement publié, les champs
+        obligatoires ne peuvent pas être vidés. Modifier `ticketing` exige la permission `ticketing.manage`.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EventUpdate' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      tags: [Événements]
+      summary: Supprimer un brouillon
+      description: Uniquement un événement en brouillon et sans commande (sinon 409 `INVALID_STATE`).
+      responses:
+        '204': { description: Supprimé }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{eventId}/publish:
+    post:
+      tags: [Événements]
+      summary: Publier un brouillon
+      description: Permission `event.publish` (administrateur et président local). 422 avec `details.fields` si des champs obligatoires manquent.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/close:
+    post:
+      tags: [Événements]
+      summary: Clôturer un événement publié (ferme aussi la billetterie)
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{eventId}/cancel:
+    post:
+      tags: [Événements]
+      summary: Annuler un événement publié
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReasonBody' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventDetail' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/posters:
+    post:
+      tags: [Événements]
+      summary: Ajouter une affiche
+      description: |
+        JPG ou PNG, 2 Mo maximum, 5 affiches maximum par événement, format 4:5 recommandé. Le type est vérifié sur le contenu du fichier.
+        La première affiche devient la couverture ; `?isCover=true` force la couverture.
+        Erreurs : 413 (trop lourd), 422 (format non supporté / image illisible), 409 (5 affiches déjà).
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: isCover, in: query, schema: { type: string, enum: ['true', 'false'] } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } }
+      responses:
+        '201': { description: Ajoutée, content: { application/json: { schema: { $ref: '#/components/schemas/Poster' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { description: Fichier trop lourd (2 Mo maximum), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/posters/{posterId}:
+    parameters:
+      - { $ref: '#/components/parameters/EventId' }
+      - { name: posterId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Événements]
+      summary: Définir comme couverture / changer l'ordre
+      description: "On ne peut pas retirer le statut de couverture à l'affiche courante : choisir une autre affiche comme couverture."
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { isCover: { type: boolean }, position: { type: integer, minimum: 0, maximum: 20 } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Poster' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Événements]
+      summary: Supprimer une affiche
+      responses:
+        '204': { description: Supprimée }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ═══════════════ Billetterie ═══════════════
+  /events/{eventId}/ticketing:
+    parameters: [ { $ref: '#/components/parameters/EventId' } ]
+    get:
+      tags: [Billetterie]
+      summary: Onglet « Billetterie » (état + catégories)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TicketingState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Billetterie]
+      summary: Modifier ouverture, clôture, maximum par commande (permission ticketing.manage)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TicketingSettingsInput' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TicketingState' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/ticketing/close:
+    post:
+      tags: [Billetterie]
+      summary: Fermer la billetterie (bouton « Fermer la billetterie »)
+      description: Événement publié uniquement. Les achats en cours de paiement ne sont pas interrompus.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TicketingState' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{eventId}/ticketing/reopen:
+    post:
+      tags: [Billetterie]
+      summary: Rouvrir la billetterie
+      description: "Refusé (409) si la date de clôture est déjà dépassée : la modifier d'abord."
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TicketingState' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{eventId}/categories:
+    post:
+      tags: [Billetterie]
+      summary: Ajouter une catégorie de billets
+      description: Pas de billets gratuits en v1 (`priceXof` ≥ 1). Nom unique par événement (insensible à la casse).
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryInput' } } } }
+      responses:
+        '201': { description: Créée, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/categories/{categoryId}:
+    parameters:
+      - { $ref: '#/components/parameters/EventId' }
+      - { $ref: '#/components/parameters/CategoryId' }
+    patch:
+      tags: [Billetterie]
+      summary: Modifier une catégorie
+      description: |
+        Le quota ne peut pas descendre sous « vendus + réservés » (409 `QUOTA_EXCEEDED`). Le nouveau prix ne s'applique qu'aux **nouvelles** commandes.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryUpdate' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+    delete:
+      tags: [Billetterie]
+      summary: Supprimer une catégorie
+      description: "Impossible si des billets ont été vendus ou réservés (409) : la désactiver (`isActive: false`) à la place."
+      responses:
+        '204': { description: Supprimée }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ═══════════════ Commandes & ventes ═══════════════
+  /events/{eventId}/orders:
+    get:
+      tags: [Commandes]
+      summary: Commandes et transactions d'un événement (onglet « Paiements »)
+      description: Permission `order.read` sur l'événement. `meta.statusCounts` alimente les pastilles Toutes / Payée / En attente / Échouée / Remboursée.
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { $ref: '#/components/parameters/OrderStatusFilter' }
+        - { $ref: '#/components/parameters/OrderSearch' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /orders/{orderId}:
+    get:
+      tags: [Commandes]
+      summary: Détail d'une commande (billets, paiements)
+      description: Un vendeur ne peut consulter que ses propres ventes.
+      parameters: [ { $ref: '#/components/parameters/OrderId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments:
+    get:
+      tags: [Commandes]
+      summary: Derniers paiements en ligne, tous événements (tableau de bord)
+      description: Permission `finance.view` (administrateur, président local), limitée aux événements de leur périmètre. Ne contient pas les ventes physiques.
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { $ref: '#/components/parameters/OrderStatusFilter' }
+        - { $ref: '#/components/parameters/OrderSearch' }
+        - { name: eventId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /physical-sales:
+    get:
+      tags: [Commandes]
+      summary: Ventes physiques
+      description: Un vendeur ne voit que ses propres ventes ; l'administrateur et le président local voient toutes les ventes.
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { $ref: '#/components/parameters/OrderStatusFilter' }
+        - { $ref: '#/components/parameters/OrderSearch' }
+        - { name: eventId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Commandes]
+      summary: Enregistrer une vente physique et émettre les billets
+      description: |
+        Permission `sale.create`. `paymentReceivedConfirmed` doit valoir `true` : le vendeur atteste avoir reçu l'argent. Les billets sont créés
+        immédiatement (numéro et QR code uniques), quota contrôlé de façon atomique.
+        Conditions : événement publié et billetterie **ouverte**, 10 billets maximum par vente.
+        **201** = vente créée ; **200** = rejeu de la même `Idempotency-Key` (même vente renvoyée, rien de créé).
+        Une clé déjà utilisée par un autre vendeur donne **409** `DUPLICATE_REQUEST`.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PhysicalSaleCreate' } } } }
+      responses:
+        '201': { description: Vente enregistrée, content: { application/json: { schema: { $ref: '#/components/schemas/OrderDetail' } } } }
+        '200': { description: Rejeu idempotent, content: { application/json: { schema: { $ref: '#/components/schemas/OrderDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /tickets/{ticketId}/cancel:
+    post:
+      tags: [Commandes]
+      summary: Annuler un billet
+      description: |
+        Permission `ticket.cancel` (administrateur, président local). Motif obligatoire, action tracée. Le billet sera refusé à l'entrée et la place
+        est remise en vente. Impossible si le billet a déjà été utilisé (409). **Le remboursement d'argent n'est pas géré par l'application.**
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReasonBody' } } } }
+      responses:
+        '200': { description: Annulé, content: { application/json: { schema: { $ref: '#/components/schemas/TicketCancelResult' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+
+  /events/{eventId}/overview:
+    get:
+      tags: [Événements]
+      summary: Vue d'ensemble d'un événement (KPI, ventes par catégorie, activité récente)
+      description: |
+        Onglet « Vue d'ensemble ». Tout utilisateur qui voit l'événement peut l'appeler (404 hors périmètre) ; certains champs dépendent des droits :
+        - `kpis.revenueXof` et `categories[].revenueXof` : `finance.view` ou `order.read` sur l'événement, sinon `null` (toujours `null` pour un brouillon).
+        - `activity` : `participant.read`, sinon `null` (elle contient des noms de participants).
+        Correspondance avec la maquette : *Recettes confirmées* = `kpis.revenueXof` · *Visiteurs* = `kpis.views` · *Billets émis* = `kpis.ticketsIssued` / `kpis.capacity` · *Places restantes* = `kpis.remaining`.
+        `capacity` et `remaining` ne comptent que les catégories **actives**. Les recettes sont celles des commandes **payées** (un billet annulé mais non remboursé reste compté ; une commande remboursée ne l'est plus) ;
+        la somme des `categories[].revenueXof` égale `kpis.revenueXof`. L'activité liste les 10 derniers billets émis, scannés ou annulés, du plus récent au plus ancien : afficher « il y a 12 min » à partir de `at`.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/EventOverview' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{eventId}/participants:
+    get:
+      tags: [Participants]
+      summary: Participants d'un événement (onglet « Participants »)
+      description: |
+        Un participant = un billet. Permission `participant.read` sur l'événement (404 hors périmètre, 403 sans la permission).
+        - `q` : chaque mot doit se retrouver dans le nom, le prénom, l'e-mail, le téléphone, la référence du billet (`JCI-2026-000001`) ou celle de la commande ; « paul soule » fonctionne.
+        - `presence` : `UPCOMING` (À venir) · `PRESENT` (scanné à l'entrée) · `CANCELLED` (annulé ou remboursé).
+        - `sort` : `number` (par défaut, ordre d'émission) · `name` (nom puis prénom) · `purchasedAt` · `category`, avec `dir=asc|desc`.
+        - `meta.counts` : compteurs `ALL`, `UPCOMING`, `PRESENT`, `CANCELLED` calculés avec `q` et `categoryId` mais **sans** `presence` (pour les pastilles) ; `meta.total` tient compte de tous les filtres.
+        - `emailStatus` : dernier état de livraison de l'e-mail du billet (`NOT_REQUESTED` : pas d'e-mail demandé à la vente ; `NOT_SENT` : pas encore envoyé).
+        - Le « N° » de la maquette est le rang dans la liste : `(page - 1) * pageSize + index + 1`.
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { $ref: '#/components/parameters/ParticipantSearch' }
+        - { $ref: '#/components/parameters/ParticipantCategory' }
+        - { $ref: '#/components/parameters/ParticipantPresence' }
+        - { $ref: '#/components/parameters/ParticipantSort' }
+        - { $ref: '#/components/parameters/ParticipantDir' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ParticipantPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/participants/export:
+    get:
+      tags: [Participants]
+      summary: Exporter les participants (CSV ou Excel)
+      description: |
+        Mêmes filtres que la liste (`q`, `categoryId`, `presence`, `sort`, `dir`), sans pagination. Permission `participant.export`. Chaque export est journalisé.
+        Réponse : le **fichier** (`Content-Disposition: attachment`). Le CSV est en UTF-8 avec BOM, séparateur `;` (ouverture directe dans Excel en français).
+        Maximum **10 000 lignes** (422 au-delà : affiner les filtres). Pour télécharger avec le jeton, utiliser `fetch` puis `blob()` (un simple lien `<a href>` n'envoie pas l'en-tête `Authorization`).
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: format, in: query, schema: { type: string, enum: [csv, xlsx], default: csv } }
+        - { $ref: '#/components/parameters/ParticipantSearch' }
+        - { $ref: '#/components/parameters/ParticipantCategory' }
+        - { $ref: '#/components/parameters/ParticipantPresence' }
+        - { $ref: '#/components/parameters/ParticipantSort' }
+        - { $ref: '#/components/parameters/ParticipantDir' }
+      responses:
+        '200':
+          description: Fichier à télécharger
+          content:
+            text/csv: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /tickets/{ticketId}:
+    get:
+      tags: [Participants]
+      summary: Fiche d'un billet (« Voir le billet »)
+      description: |
+        Titulaire, catégorie, statut et présence, commande et paiement associés, historique des e-mails (20 derniers) et `filesReady`.
+        Les fichiers se téléchargent avec `GET /tickets/{ticketId}/files/{kind}`.
+        Permission `participant.read` sur l'événement, ou le vendeur qui a enregistré la vente. Sinon 404.
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TicketDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{ticketId}/files/{kind}:
+    get:
+      tags: [Billets]
+      summary: Lien de téléchargement d'un billet (PDF, image) ou du visuel de partage
+      description: |
+        Renvoie une **URL signée valable 15 minutes** (à ouvrir ou télécharger immédiatement ; ne pas la stocker). Permission `participant.read` sur l'événement,
+        ou le vendeur qui a enregistré la vente (pour remettre le billet en main propre).
+        `kind` : `pdf` (impression, 297 × 99,5 mm), `image` (PNG haute définition, pour téléphone), `share` (visuel « J'y serai ! » 1080 × 1920, sans QR code).
+        **202** : fichiers pas encore générés (quelques secondes après un paiement ou une vente) → réessayer dans 2 à 3 secondes ; la génération est relancée automatiquement si besoin.
+      parameters:
+        - { $ref: '#/components/parameters/TicketId' }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [pdf, image, share] } }
+      responses:
+        '200': { description: Lien prêt, content: { application/json: { schema: { $ref: '#/components/schemas/TicketFile' } } } }
+        '202': { description: Fichiers en cours de génération, content: { application/json: { schema: { $ref: '#/components/schemas/TicketFilePending' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /tickets/{ticketId}/resend:
+    post:
+      tags: [Billets]
+      summary: Renvoyer un billet par e-mail
+      description: |
+        Permission `ticket.resend` (administrateur, président local, organisateur de l'événement). Envoie le PDF du billet et le lien « Mes billets » à `toEmail`,
+        sinon à l'adresse du bénéficiaire, sinon à celle de l'acheteur (422 si aucune). Limité à **5 renvois par heure et par billet** (429). Billet valide uniquement (409).
+        L'envoi est asynchrone (202) : son suivi (envoyé, délivré, rebond) est enregistré côté serveur.
+      parameters: [ { $ref: '#/components/parameters/TicketId' } ]
+      requestBody: { required: false, content: { application/json: { schema: { $ref: '#/components/schemas/ResendBody' } } } }
+      responses:
+        '202': { description: Envoi en file d'attente, content: { application/json: { schema: { $ref: '#/components/schemas/ResendResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ═══════════════ Public ═══════════════
+  /public/events/{slug}:
+    get:
+      tags: [Public]
+      summary: Page publique d'un événement
+      description: |
+        Utilisée aussi côté serveur (SvelteKit) pour le rendu et les balises Open Graph (aperçu WhatsApp/Facebook : `og`). Les brouillons répondent 404.
+        Les événements clôturés ou annulés restent consultables (`status`, `salesStatus`). `remaining` est plafonné à 10 (le stock exact n'est pas exposé).
+        La réponse porte `Cache-Control: public, max-age=0, s-maxage=60, stale-while-revalidate=60` : un CDN ou le serveur SvelteKit peut la garder 60 s ; le stock affiché est donc à environ une minute près, et le serveur tranche à la création de la commande. Limite : 120 appels par minute et par adresse IP.
+      security: []
+      parameters: [ { $ref: '#/components/parameters/Slug' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicEvent' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /public/events/{slug}/views:
+    post:
+      tags: [Public]
+      summary: Compter une vue (appel léger, à faire une fois au chargement de la page)
+      security: []
+      parameters: [ { $ref: '#/components/parameters/Slug' } ]
+      responses:
+        '204': { description: Compté }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /public/events/{slug}/orders:
+    post:
+      tags: [Public]
+      summary: Créer une commande et obtenir le lien de paiement
+      description: |
+        Réserve les places pendant **15 minutes** (`reservedUntil`) puis renvoie `checkoutUrl` : **rediriger le navigateur vers cette URL** (page de paiement FedaPay).
+        Une fois le paiement fait, FedaPay renvoie l'acheteur vers `{PUBLIC_WEB_URL}/commande/{reference}?token={accessToken}` : cette page doit exister côté public.
+
+        **Aucun billet n'existe tant que le paiement n'est pas confirmé** côté serveur. Ne jamais considérer le retour sur la page comme une preuve de paiement :
+        interroger `GET /public/orders/{reference}`.
+
+        - `Idempotency-Key` obligatoire : à générer à l'ouverture du formulaire et à **réutiliser** si l'utilisateur reclique ou si la requête est rejouée (on renvoie alors la même commande, **avec le code 201**).
+        - `captchaToken` : jeton Cloudflare Turnstile (obligatoire en production).
+        - Un seul bénéficiaire par billet (`tickets` : un élément par billet, `categoryId` + prénom + nom ; e-mail et téléphone facultatifs).
+        - 409 : `QUOTA_EXCEEDED`, `SALES_CLOSED`, `MAX_PER_ORDER_EXCEEDED`, `DUPLICATE_REQUEST`. 502 `PAYMENT_PROVIDER_ERROR` : le service de paiement est indisponible, aucune place n'est retenue, on peut réessayer.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Slug' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PublicOrderCreate' } } } }
+      responses:
+        '201': { description: Commande créée (ou rejouée), content: { application/json: { schema: { $ref: '#/components/schemas/PublicOrderCreated' } } } }
+        '400': { description: Vérification anti-robot échouée (`CAPTCHA_FAILED`), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '502': { description: Service de paiement indisponible (`PAYMENT_PROVIDER_ERROR`), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /public/orders/{reference}:
+    get:
+      tags: [Public]
+      summary: Suivi de commande (page de retour de paiement)
+      description: |
+        À interroger **toutes les 3 secondes maximum** jusqu'à un statut final (`PAID`, `FAILED`, `EXPIRED`, `REFUND_REQUIRED`). À chaque appel, le serveur revérifie le paiement
+        auprès du prestataire : les billets apparaissent même si une notification est en retard. `message` contient un texte prêt à afficher.
+        Le `token` est un secret : le retirer de la barre d'adresse après lecture (`history.replaceState`) et servir la page avec `Referrer-Policy: no-referrer`.
+        Mauvais jeton et commande inconnue donnent la même réponse 404. Les billets (PDF, image, visuel de partage) sont téléchargeables via les liens de `tickets[]` dès que `filesReady` vaut `true`.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Reference' }
+        - { $ref: '#/components/parameters/PublicToken' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicOrderStatus' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /public/orders/{reference}/retry-payment:
+    post:
+      tags: [Public]
+      summary: Relancer le paiement (bouton « Réessayer »)
+      description: |
+        Possible tant que la réservation est valide (statuts `PENDING_PAYMENT`, `PAYMENT_IN_PROGRESS`, `FAILED`). Si le paiement précédent est encore ouvert chez le prestataire,
+        le même paiement est repris (jamais de double débit). 409 `INVALID_STATE` si la commande est déjà payée ou a expiré (« Veuillez recommencer votre achat »).
+        Même réponse que la création de commande.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/Reference' }
+        - { $ref: '#/components/parameters/PublicToken' }
+      responses:
+        '200': { description: Nouveau lien de paiement, content: { application/json: { schema: { $ref: '#/components/schemas/PublicOrderCreated' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '502': { description: Service de paiement indisponible, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /public/tickets/{qrToken}:
+    get:
+      tags: [Public]
+      summary: Page minimale d'un billet (ouverte par un scan « appareil photo » classique)
+      description: Ne marque **jamais** le billet comme utilisé et ne renvoie qu'un nom abrégé. La validation à l'entrée se fera via l'application de contrôle (étape suivante).
+      security: []
+      parameters: [ { name: qrToken, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicTicket' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ═══════════════ Interne ═══════════════
+  /webhooks/brevo:
+    post:
+      tags: [Interne]
+      summary: Statuts de livraison des e-mails (appelé par Brevo uniquement)
+      description: "Authentification par jeton secret (`Authorization: Bearer`). **Non destiné aux interfaces.**"
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Reçu, content: { application/json: { schema: { type: object, properties: { received: { type: boolean }, updated: { type: integer } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { description: Webhook non configuré, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /webhooks/fedapay:
+    post:
+      tags: [Interne]
+      summary: Notifications FedaPay (appelé par FedaPay uniquement)
+      description: Signature `X-FEDAPAY-SIGNATURE` vérifiée ; répond 200 immédiatement, traitement asynchrone. **Non destiné aux interfaces.**
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Reçu }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT, description: "Jeton d'accès Supabase Auth (SDK Supabase)" }
+
+  parameters:
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 10 } }
+    EventId: { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+    CategoryId: { name: categoryId, in: path, required: true, schema: { type: string, format: uuid } }
+    TicketId: { name: ticketId, in: path, required: true, schema: { type: string, format: uuid } }
+    OrderId: { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+    UserId: { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    Slug: { name: slug, in: path, required: true, schema: { type: string }, example: leadership-impact-2026 }
+    Reference: { name: reference, in: path, required: true, schema: { type: string }, example: CMD-0012 }
+    PublicToken: { name: token, in: query, required: true, description: Jeton de suivi de la commande (`accessToken`), schema: { type: string, minLength: 20, maxLength: 200 } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: "16 à 80 caractères (un UUID convient)", schema: { type: string, minLength: 16, maxLength: 80 } }
+    OrderStatusFilter:
+      name: status
+      in: query
+      description: "`PENDING` = alias « En attente » (regroupe `PENDING_PAYMENT` et `PAYMENT_IN_PROGRESS`)"
+      schema: { type: string, enum: [PENDING, PENDING_PAYMENT, PAYMENT_IN_PROGRESS, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED, REFUND_REQUIRED] }
+    OrderSearch: { name: q, in: query, description: "Référence de commande, référence FedaPay ou nom de l'acheteur", schema: { type: string, maxLength: 100 } }
+    ParticipantSearch: { name: q, in: query, description: "Nom, prénom, e-mail, téléphone, référence du billet ou de la commande (chaque mot doit correspondre)", schema: { type: string, maxLength: 100 } }
+    ParticipantCategory: { name: categoryId, in: query, schema: { type: string, format: uuid } }
+    ParticipantPresence: { name: presence, in: query, description: "À venir · Présent · Annulé", schema: { type: string, enum: [UPCOMING, PRESENT, CANCELLED] } }
+    ParticipantSort: { name: sort, in: query, schema: { type: string, enum: [number, name, purchasedAt, category], default: number } }
+    ParticipantDir: { name: dir, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+
+  responses:
+    Unauthorized: { description: "Jeton absent, expiré ou invalide (`UNAUTHORIZED`)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: "Permission insuffisante, ou compte non activé / désactivé (`FORBIDDEN`)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: "Introuvable, ou hors du périmètre de l'utilisateur (`NOT_FOUND`)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: "Conflit d'état ou de stock (`CONFLICT`, `INVALID_STATE`, `QUOTA_EXCEEDED`, `SALES_CLOSED`, `MAX_PER_ORDER_EXCEEDED`, `DUPLICATE_REQUEST`)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Validation: { description: "Données invalides (`VALIDATION_ERROR`) : `details.fields` indique les champs", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    RateLimited: { description: "Trop de requêtes (`RATE_LIMITED`) ; voir l'en-tête `Retry-After`", headers: { Retry-After: { schema: { type: integer }, description: Secondes à attendre } }, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  schemas:
+    # ───────── Transverse ─────────
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, CONFLICT, QUOTA_EXCEEDED, SALES_CLOSED, MAX_PER_ORDER_EXCEEDED,
+                 EVENT_NOT_PUBLISHED, INVALID_STATE, DUPLICATE_REQUEST, CAPTCHA_FAILED, RATE_LIMITED, PAYMENT_PROVIDER_ERROR, APP_UPDATE_REQUIRED, INTERNAL_ERROR]
+        message: { type: string, description: "Message en français, affichable tel quel" }
+        details:
+          type: object
+          additionalProperties: true
+          description: "Pour `VALIDATION_ERROR` : `{ fields: { \"tickets.0.email\": \"Adresse e-mail invalide.\" } }`"
+      example: { code: VALIDATION_ERROR, message: Certaines données sont invalides., details: { fields: { 'buyer.phone': Numéro de téléphone invalide. } } }
+    PageMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    ReasonBody:
+      type: object
+      required: [reason]
+      properties: { reason: { type: string, minLength: 3, maxLength: 500 } }
+
+    # ───────── Énumérations ─────────
+    EventStatus: { type: string, enum: [DRAFT, PUBLISHED, CLOSED, CANCELLED] }
+    EventCategory: { type: string, enum: [CONFERENCE, FORMATION, ATELIER, NETWORKING, GALA, AUTRE] }
+    SalesStatus: { type: string, enum: [NOT_OPEN, OPEN, CLOSED], description: "Statut de la billetterie (distinct du statut de publication). Calculé par le serveur." }
+    SalesStatusOrNull: { type: string, nullable: true, enum: [NOT_OPEN, OPEN, CLOSED, null], description: "null pour un brouillon" }
+    CategoryAvailability: { type: string, enum: [AVAILABLE, SOLD_OUT, NOT_STARTED, ENDED, DISABLED] }
+    EventOverview:
+      type: object
+      required: [eventId, kpis, categories, activity]
+      properties:
+        eventId: { type: string, format: uuid }
+        kpis:
+          type: object
+          required: [revenueXof, views, ticketsIssued, capacity, remaining]
+          properties:
+            revenueXof: { type: integer, nullable: true, description: "Recettes confirmées (commandes payées). null sans droit sur les commandes, ou pour un brouillon" }
+            views: { type: integer, description: "Visiteurs : vues de la page publique" }
+            ticketsIssued: { type: integer, description: "Billets valides ou utilisés" }
+            capacity: { type: integer, description: "Somme des quotas des catégories actives" }
+            remaining: { type: integer, description: "Places encore vendables (catégories actives) : quota − vendus − réservés. Valeur exacte (la page publique la plafonne à 10)" }
+        categories:
+          type: array
+          description: "Dans l'ordre d'affichage de la billetterie"
+          items:
+            type: object
+            required: [id, name, priceXof, isActive, quota, sold, reserved, remaining, revenueXof]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              priceXof: { type: integer }
+              isActive: { type: boolean }
+              quota: { type: integer }
+              sold: { type: integer, description: "Billets vendus (« 97 sur 162 billets »)" }
+              reserved: { type: integer, description: "Places réservées par des paiements en cours" }
+              remaining: { type: integer }
+              revenueXof: { type: integer, nullable: true, description: "Recettes de la catégorie ; null sans droit sur les commandes" }
+        activity:
+          type: array
+          nullable: true
+          description: "10 derniers événements, du plus récent au plus ancien ; null sans la permission `participant.read`"
+          items:
+            type: object
+            required: [type, at, ticketId, ticketNumber, holderName, category]
+            properties:
+              type: { type: string, enum: [TICKET_ISSUED, TICKET_CHECKED_IN, TICKET_CANCELLED], description: "Billet émis · scanné à l'entrée · annulé" }
+              at: { type: string, format: date-time }
+              ticketId: { type: string, format: uuid }
+              ticketNumber: { type: string }
+              holderName: { type: string }
+              category: { type: string }
+    Presence: { type: string, enum: [UPCOMING, PRESENT, CANCELLED], description: "UPCOMING : billet valide, pas encore scanné · PRESENT : scanné à l'entrée · CANCELLED : annulé ou remboursé" }
+    EmailDelivery:
+      type: string
+      enum: [NOT_REQUESTED, NOT_SENT, QUEUED, SENT, DELIVERED, DEFERRED, SOFT_BOUNCE, HARD_BOUNCE, BLOCKED, SPAM, FAILED]
+      description: "NOT_REQUESTED : aucun e-mail demandé à la vente · NOT_SENT : pas encore envoyé · les autres valeurs suivent la livraison (Brevo)"
+    ParticipantRow:
+      type: object
+      required: [ticketId, ticketNumber, firstName, lastName, phone, email, categoryId, category, amountXof, paymentStatus, paymentMethod, ticketStatus, presence, checkedInAt, purchasedAt, orderId, orderReference, channel, emailStatus]
+      properties:
+        ticketId: { type: string, format: uuid }
+        ticketNumber: { type: string, example: JCI-2026-000001 }
+        firstName: { type: string }
+        lastName: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        categoryId: { type: string, format: uuid }
+        category: { type: string }
+        amountXof: { type: integer, description: "Prix de ce billet" }
+        paymentStatus: { $ref: '#/components/schemas/OrderStatus' }
+        paymentMethod: { $ref: '#/components/schemas/PaymentMethod' }
+        ticketStatus: { $ref: '#/components/schemas/TicketStatus' }
+        presence: { $ref: '#/components/schemas/Presence' }
+        checkedInAt: { type: string, format: date-time, nullable: true }
+        purchasedAt: { type: string, format: date-time }
+        orderId: { type: string, format: uuid }
+        orderReference: { type: string, example: CMD-0012 }
+        channel: { $ref: '#/components/schemas/OrderChannel' }
+        emailStatus: { $ref: '#/components/schemas/EmailDelivery' }
+    ParticipantPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ParticipantRow' } }
+        meta:
+          allOf:
+            - { $ref: '#/components/schemas/PageMeta' }
+            - type: object
+              required: [counts]
+              properties:
+                counts:
+                  type: object
+                  required: [ALL, UPCOMING, PRESENT, CANCELLED]
+                  properties: { ALL: { type: integer }, UPCOMING: { type: integer }, PRESENT: { type: integer }, CANCELLED: { type: integer } }
+                  example: { ALL: 142, UPCOMING: 120, PRESENT: 20, CANCELLED: 2 }
+    TicketDetail:
+      type: object
+      required: [ticketId, ticketNumber, eventId, eventTitle, holder, category, amountXof, ticketStatus, presence, issuedAt, checkedInAt, checkedInBy, cancelledAt, cancelledBy, cancelReason, order, emails, filesReady]
+      properties:
+        ticketId: { type: string, format: uuid }
+        ticketNumber: { type: string }
+        eventId: { type: string, format: uuid }
+        eventTitle: { type: string }
+        holder:
+          type: object
+          required: [firstName, lastName, email, phone]
+          properties: { firstName: { type: string }, lastName: { type: string }, email: { type: string, nullable: true }, phone: { type: string, nullable: true } }
+        category:
+          type: object
+          required: [id, name]
+          properties: { id: { type: string, format: uuid }, name: { type: string } }
+        amountXof: { type: integer }
+        ticketStatus: { $ref: '#/components/schemas/TicketStatus' }
+        presence: { $ref: '#/components/schemas/Presence' }
+        issuedAt: { type: string, format: date-time }
+        checkedInAt: { type: string, format: date-time, nullable: true }
+        checkedInBy: { type: string, nullable: true, description: "Agent d'accueil qui a scanné le billet" }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledBy: { type: string, nullable: true }
+        cancelReason: { type: string, nullable: true }
+        order:
+          type: object
+          required: [id, reference, channel, status, buyerName, buyerEmail, buyerPhone, paymentMethod, paymentReference, createdAt, paidAt, soldBy]
+          properties:
+            id: { type: string, format: uuid }
+            reference: { type: string }
+            channel: { $ref: '#/components/schemas/OrderChannel' }
+            status: { $ref: '#/components/schemas/OrderStatus' }
+            buyerName: { type: string }
+            buyerEmail: { type: string, nullable: true }
+            buyerPhone: { type: string, nullable: true }
+            paymentMethod: { $ref: '#/components/schemas/PaymentMethod' }
+            paymentReference: { type: string, nullable: true }
+            createdAt: { type: string, format: date-time }
+            paidAt: { type: string, format: date-time, nullable: true }
+            soldBy: { type: string, nullable: true, description: "Vendeur (vente physique)" }
+        emails:
+          type: array
+          description: "Du plus récent au plus ancien (20 maximum) : confirmation de commande et renvois"
+          items:
+            type: object
+            required: [template, toEmail, status, attempt, sentAt, lastEventAt, createdAt]
+            properties:
+              template: { type: string, enum: [TICKET_CONFIRMATION, TICKET_RESEND] }
+              toEmail: { type: string }
+              status: { $ref: '#/components/schemas/EmailDelivery' }
+              attempt: { type: integer }
+              sentAt: { type: string, format: date-time, nullable: true }
+              lastEventAt: { type: string, format: date-time, nullable: true }
+              createdAt: { type: string, format: date-time }
+        filesReady: { type: boolean, description: "PDF, image et visuel de partage générés (sinon `GET …/files/{kind}` répond 202)" }
+    OrderChannel: { type: string, enum: [ONLINE, PHYSICAL] }
+    OrderStatus:
+      type: string
+      enum: [PENDING_PAYMENT, PAYMENT_IN_PROGRESS, PAID, FAILED, EXPIRED, CANCELLED, REFUNDED, REFUND_REQUIRED]
+      description: |
+        `REFUND_REQUIRED` : argent reçu mais places impossibles à garantir (paiement tardif sans stock) → remboursement manuel par l'organisation.
+    PaymentStatus:
+      type: string
+      enum: [PENDING, PAID, FAILED, EXPIRED, REFUNDED, REFUND_REQUIRED]
+      description: "`REFUND_REQUIRED` : argent reçu à rembourser (doublon de paiement, montant différent de celui attendu, ou paiement tardif sans stock)."
+    PaymentMethod: { type: string, enum: [MOBILE_MONEY_MTN, MOBILE_MONEY_MOOV, MOBILE_MONEY_OTHER, CARD, CASH, MOBILE_MONEY_DIRECT, UNKNOWN] }
+    TicketStatus: { type: string, enum: [VALID, USED, CANCELLED, REFUNDED] }
+    RoleCode: { type: string, enum: [ADMIN, PRESIDENT, ORGANIZER, SELLER, GATE_AGENT] }
+
+    # ───────── Compte & utilisateurs ─────────
+    RoleGrant:
+      type: object
+      required: [id, roleCode, eventId]
+      properties:
+        id: { type: string, format: uuid }
+        roleCode: { $ref: '#/components/schemas/RoleCode' }
+        eventId: { type: string, format: uuid, nullable: true, description: "null = rôle global" }
+    Me:
+      type: object
+      required: [id, email, firstName, lastName, roles, permissions, eventPermissions]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        roles: { type: array, items: { $ref: '#/components/schemas/RoleGrant' } }
+        permissions: { type: array, items: { type: string }, example: [event.create, event.read, event.update] }
+        eventPermissions:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+          description: "{ <eventId>: [permissions] } pour les rôles limités à un événement"
+    Role:
+      type: object
+      required: [code, name, eventScope, permissions]
+      properties:
+        code: { $ref: '#/components/schemas/RoleCode' }
+        name: { type: string }
+        eventScope: { type: string, enum: [ALL_EVENTS, OWN_OR_ASSIGNED] }
+        permissions: { type: array, items: { type: string } }
+    RoleGrantInput:
+      type: object
+      required: [roleCode]
+      properties:
+        roleCode: { $ref: '#/components/schemas/RoleCode' }
+        eventId: { type: string, format: uuid, nullable: true }
+    User:
+      type: object
+      required: [id, email, firstName, lastName, phone, status, roles, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        firstName: { type: string }
+        lastName: { type: string }
+        phone: { type: string, nullable: true }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        roles: { type: array, items: { $ref: '#/components/schemas/RoleGrant' } }
+        createdAt: { type: string, format: date-time }
+    UserCreate:
+      type: object
+      required: [email, firstName, lastName, roles]
+      properties:
+        email: { type: string, format: email }
+        firstName: { type: string, minLength: 1, maxLength: 80 }
+        lastName: { type: string, minLength: 1, maxLength: 80 }
+        phone: { type: string }
+        roles: { type: array, minItems: 1, maxItems: 10, items: { $ref: '#/components/schemas/RoleGrantInput' } }
+    UserUpdate:
+      type: object
+      properties:
+        firstName: { type: string, minLength: 1, maxLength: 80 }
+        lastName: { type: string, minLength: 1, maxLength: 80 }
+        phone: { type: string, nullable: true }
+    UserPage:
+      type: object
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/User' } }, meta: { $ref: '#/components/schemas/PageMeta' } }
+
+    # ───────── Événements ─────────
+    Poster:
+      type: object
+      required: [id, url, isCover, position, width, height]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        isCover: { type: boolean }
+        position: { type: integer }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+    Organizer:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 200 }
+    ProgrammeItem:
+      type: object
+      required: [time, label]
+      properties:
+        time: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '08:00' }
+        label: { type: string, minLength: 1, maxLength: 200, example: Accueil et installation }
+    EventSummary:
+      type: object
+      required: [id, slug, title, category, status, salesStatus, startsAt, venueName, city, coverUrl, views, ticketsIssued, capacity, revenueXof, presentCount]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string, example: leadership-impact-2026 }
+        title: { type: string }
+        category: { $ref: '#/components/schemas/EventCategory' }
+        status: { $ref: '#/components/schemas/EventStatus' }
+        salesStatus: { $ref: '#/components/schemas/SalesStatusOrNull' }
+        startsAt: { type: string, format: date-time, nullable: true, description: "null tant que la date n'est pas renseignée (brouillon)" }
+        venueName: { type: string }
+        city: { type: string }
+        coverUrl: { type: string, format: uri, nullable: true }
+        views: { type: integer, description: Nombre de vues de la page publique }
+        ticketsIssued: { type: integer, description: Billets valides ou utilisés }
+        capacity: { type: integer, description: Somme des quotas des catégories actives }
+        revenueXof: { type: integer, nullable: true, description: "Recettes confirmées. null pour un brouillon ou sans droit de lecture des commandes" }
+        presentCount: { type: integer, nullable: true, description: "Présents contrôlés ; null avant le début de l'événement" }
+    EventPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/EventSummary' } }
+        meta:
+          allOf:
+            - { $ref: '#/components/schemas/PageMeta' }
+            - type: object
+              required: [statusCounts]
+              properties:
+                statusCounts:
+                  type: object
+                  additionalProperties: { type: integer }
+                  example: { ALL: 12, DRAFT: 2, PUBLISHED: 3, CLOSED: 6, CANCELLED: 1 }
+    TicketingSettingsInput:
+      type: object
+      properties:
+        salesOpensAt: { type: string, format: date-time, nullable: true, description: "Avec décalage horaire, ex. 2026-10-01T08:00:00+01:00" }
+        salesClosesAt: { type: string, format: date-time, nullable: true }
+        maxPerOrder: { type: integer, minimum: 1, maximum: 10 }
+    EventFields:
+      type: object
+      properties:
+        title: { type: string, minLength: 3, maxLength: 150 }
+        category: { $ref: '#/components/schemas/EventCategory' }
+        description: { type: string, maxLength: 5000 }
+        date: { type: string, format: date, description: "Heure locale du Bénin", example: '2026-11-28' }
+        startTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '08:00' }
+        endTime: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', example: '17:00' }
+        venueName: { type: string, maxLength: 150 }
+        city: { type: string, maxLength: 100 }
+        accentColor: { type: string, nullable: true, pattern: '^#[0-9A-Fa-f]{6}$', description: Couleur d'accent du billet }
+        contactEmail: { type: string, format: email, nullable: true }
+        contactPhone: { type: string, nullable: true, maxLength: 30 }
+        practicalInfo: { type: string, nullable: true, maxLength: 2000, description: "Page publique, section « Infos pratiques ». `null` ou vide : section non affichée" }
+        ticketTerms: { type: string, nullable: true, maxLength: 2000, description: "Page publique, section « Conditions d'utilisation du billet »" }
+        refundPolicy: { type: string, nullable: true, maxLength: 2000, description: "Page publique, section « Annulation et remboursement »" }
+        programme: { type: array, maxItems: 30, items: { $ref: '#/components/schemas/ProgrammeItem' } }
+        organizers: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/Organizer' } }
+        ticketing: { $ref: '#/components/schemas/TicketingSettingsInput' }
+    EventCreate:
+      allOf:
+        - $ref: '#/components/schemas/EventFields'
+        - type: object
+          required: [title]
+          properties:
+            publish: { type: boolean, default: false }
+            categories:
+              type: array
+              maxItems: 10
+              description: Catégories de billets initiales (ensuite, routes `/categories`)
+              items: { $ref: '#/components/schemas/CategoryInput' }
+    EventUpdate:
+      $ref: '#/components/schemas/EventFields'
+    EventDetail:
+      allOf:
+        - $ref: '#/components/schemas/EventSummary'
+        - type: object
+          required: [description, endsAt, date, startTime, endTime, posters, organizers, programme, accentColor, contactEmail, contactPhone, practicalInfo, ticketTerms, refundPolicy, publicUrl, createdBy, createdAt]
+          properties:
+            description: { type: string }
+            endsAt: { type: string, format: date-time, nullable: true }
+            date: { type: string, format: date, nullable: true, description: "Date locale, pour pré-remplir le formulaire" }
+            startTime: { type: string, nullable: true, example: '08:00' }
+            endTime: { type: string, nullable: true, example: '17:00' }
+            posters: { type: array, items: { $ref: '#/components/schemas/Poster' } }
+            organizers: { type: array, items: { $ref: '#/components/schemas/Organizer' } }
+            programme: { type: array, items: { $ref: '#/components/schemas/ProgrammeItem' } }
+            accentColor: { type: string, nullable: true }
+            contactEmail: { type: string, nullable: true }
+            contactPhone: { type: string, nullable: true }
+            practicalInfo: { type: string, nullable: true }
+            ticketTerms: { type: string, nullable: true }
+            refundPolicy: { type: string, nullable: true }
+            publicUrl: { type: string, format: uri, nullable: true, description: "null pour un brouillon" }
+            createdBy: { type: string, example: Fatou Zinsou }
+            createdAt: { type: string, format: date-time }
+
+    # ───────── Billetterie ─────────
+    CategoryInput:
+      type: object
+      required: [name, priceXof, quota]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        priceXof: { type: integer, minimum: 1, maximum: 10000000, description: "Billets gratuits non proposés en v1" }
+        quota: { type: integer, minimum: 1, maximum: 100000 }
+        conditions: { type: string, nullable: true, maxLength: 300, description: "Texte libre affiché (ex. « Justificatif demandé »), sans logique associée" }
+        saleStartsAt: { type: string, format: date-time, nullable: true, description: "Défaut : ouverture de la billetterie" }
+        saleEndsAt: { type: string, format: date-time, nullable: true, description: "Défaut : clôture de la billetterie" }
+        maxPerOrder: { type: integer, minimum: 1, maximum: 10, nullable: true }
+        isActive: { type: boolean }
+    CategoryUpdate:
+      type: object
+      description: Mêmes champs que `CategoryInput`, tous facultatifs.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        priceXof: { type: integer, minimum: 1, maximum: 10000000 }
+        quota: { type: integer, minimum: 1, maximum: 100000 }
+        conditions: { type: string, nullable: true, maxLength: 300 }
+        saleStartsAt: { type: string, format: date-time, nullable: true }
+        saleEndsAt: { type: string, format: date-time, nullable: true }
+        maxPerOrder: { type: integer, minimum: 1, maximum: 10, nullable: true }
+        isActive: { type: boolean }
+    Category:
+      type: object
+      required: [id, name, priceXof, quota, conditions, saleStartsAt, saleEndsAt, maxPerOrder, isActive, sold, reserved, remaining, availability]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        priceXof: { type: integer }
+        quota: { type: integer }
+        conditions: { type: string, nullable: true }
+        saleStartsAt: { type: string, format: date-time, nullable: true }
+        saleEndsAt: { type: string, format: date-time, nullable: true }
+        maxPerOrder: { type: integer, nullable: true }
+        isActive: { type: boolean }
+        sold: { type: integer }
+        reserved: { type: integer, description: Places retenues par des commandes en cours de paiement }
+        remaining: { type: integer, description: quota − vendus − réservés }
+        availability: { $ref: '#/components/schemas/CategoryAvailability' }
+    TicketingState:
+      type: object
+      required: [salesStatus, salesOpensAt, salesClosesAt, manuallyClosed, maxPerOrder, categories, totalCapacity, potentialRevenueXof]
+      properties:
+        salesStatus: { $ref: '#/components/schemas/SalesStatusOrNull' }
+        salesOpensAt: { type: string, format: date-time, nullable: true }
+        salesClosesAt: { type: string, format: date-time, nullable: true }
+        manuallyClosed: { type: boolean }
+        maxPerOrder: { type: integer }
+        categories: { type: array, items: { $ref: '#/components/schemas/Category' } }
+        totalCapacity: { type: integer, description: Somme des quotas des catégories actives }
+        potentialRevenueXof: { type: integer, description: Recettes si tout est vendu }
+
+    # ───────── Commandes (administration) ─────────
+    OrderSummary:
+      type: object
+      required: [id, reference, providerReference, eventId, buyerName, channel, items, amountXof, paymentMethod, status, soldBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string, example: CMD-0012 }
+        providerReference: { type: string, nullable: true, description: "Référence de la transaction FedaPay, ou référence Mobile Money saisie pour une vente physique" }
+        eventId: { type: string, format: uuid }
+        buyerName: { type: string }
+        channel: { $ref: '#/components/schemas/OrderChannel' }
+        items: { type: string, example: "1 × VIP, 1 × Standard" }
+        amountXof: { type: integer }
+        paymentMethod: { $ref: '#/components/schemas/PaymentMethod' }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        soldBy: { type: string, nullable: true, description: "Vendeur (vente physique)" }
+        createdAt: { type: string, format: date-time }
+    OrderPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/OrderSummary' } }
+        meta:
+          allOf:
+            - { $ref: '#/components/schemas/PageMeta' }
+            - type: object
+              required: [statusCounts]
+              properties:
+                statusCounts: { type: object, additionalProperties: { type: integer }, description: "Une entrée par statut présent, plus `ALL` et `PENDING` (= PENDING_PAYMENT + PAYMENT_IN_PROGRESS)", example: { ALL: 104, PAID: 92, PAYMENT_IN_PROGRESS: 2, PENDING: 2, FAILED: 7, REFUNDED: 3 } }
+    OrderTicket:
+      type: object
+      required: [ticketId, ticketNumber, fullName, phone, email, category, ticketStatus, checkedInAt]
+      properties:
+        ticketId: { type: string, format: uuid }
+        ticketNumber: { type: string, example: JCI-2026-000001 }
+        fullName: { type: string }
+        phone: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        category: { type: string }
+        ticketStatus: { $ref: '#/components/schemas/TicketStatus' }
+        checkedInAt: { type: string, format: date-time, nullable: true }
+    OrderPayment:
+      type: object
+      required: [status, method, expectedAmountXof, confirmedAmountXof, confirmedAt, failureReason]
+      properties:
+        status: { $ref: '#/components/schemas/PaymentStatus' }
+        method: { $ref: '#/components/schemas/PaymentMethod' }
+        expectedAmountXof: { type: integer }
+        confirmedAmountXof: { type: integer, nullable: true }
+        confirmedAt: { type: string, format: date-time, nullable: true }
+        failureReason: { type: string, nullable: true, description: "Ex. AMOUNT_MISMATCH, DUPLICATE_PAYMENT, LATE_PAYMENT_NO_CAPACITY, declined" }
+    OrderDetail:
+      allOf:
+        - $ref: '#/components/schemas/OrderSummary'
+        - type: object
+          required: [buyerEmail, buyerPhone, tickets, payments]
+          properties:
+            buyerEmail: { type: string, nullable: true }
+            buyerPhone: { type: string, nullable: true }
+            tickets: { type: array, items: { $ref: '#/components/schemas/OrderTicket' } }
+            payments: { type: array, items: { $ref: '#/components/schemas/OrderPayment' }, description: "Du plus récent au plus ancien" }
+    TicketFile:
+      type: object
+      required: [url, expiresAt, fileName, contentType]
+      properties:
+        url: { type: string, format: uri, description: "URL signée, valable 15 minutes" }
+        expiresAt: { type: string, format: date-time }
+        fileName: { type: string, example: Billet-JCI-2026-000001.pdf }
+        contentType: { type: string, enum: [application/pdf, image/png, image/jpeg] }
+    TicketFilePending:
+      type: object
+      required: [status]
+      properties: { status: { type: string, enum: [PENDING] } }
+    ResendBody:
+      type: object
+      properties: { toEmail: { type: string, format: email, description: "Autre adresse que celle enregistrée" } }
+    ResendResult:
+      type: object
+      required: [queued]
+      properties: { queued: { type: boolean, enum: [true] } }
+    TicketCancelResult:
+      type: object
+      required: [ticketId, status]
+      properties: { ticketId: { type: string, format: uuid }, status: { type: string, enum: [CANCELLED] } }
+
+    # ───────── Saisie d'achat ─────────
+    Holder:
+      type: object
+      required: [categoryId, firstName, lastName]
+      description: Un bénéficiaire = un billet.
+      properties:
+        categoryId: { type: string, format: uuid }
+        firstName: { type: string, minLength: 1, maxLength: 80 }
+        lastName: { type: string, minLength: 1, maxLength: 80 }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+    OnlineBuyer:
+      type: object
+      required: [firstName, lastName, email, phone]
+      properties:
+        firstName: { type: string, minLength: 1, maxLength: 80 }
+        lastName: { type: string, minLength: 1, maxLength: 80 }
+        email: { type: string, format: email, description: "Les billets seront envoyés à cette adresse" }
+        phone: { type: string }
+    PhysicalBuyer:
+      type: object
+      required: [firstName, lastName]
+      properties:
+        firstName: { type: string, minLength: 1, maxLength: 80 }
+        lastName: { type: string, minLength: 1, maxLength: 80 }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+    PhysicalSaleCreate:
+      type: object
+      required: [eventId, buyer, tickets, paymentMethod, paymentReceivedConfirmed]
+      properties:
+        eventId: { type: string, format: uuid }
+        buyer: { $ref: '#/components/schemas/PhysicalBuyer' }
+        tickets: { type: array, minItems: 1, maxItems: 10, items: { $ref: '#/components/schemas/Holder' } }
+        paymentMethod: { type: string, enum: [CASH, MOBILE_MONEY_DIRECT] }
+        paymentReference: { type: string, nullable: true, maxLength: 100, description: Référence de la transaction Mobile Money si disponible }
+        paymentReceivedConfirmed: { type: boolean, enum: [true], description: Le vendeur atteste avoir reçu l'argent }
+        sendEmail: { type: boolean, default: true, description: "Envoyer le billet par e-mail à l'acheteur (nécessite `buyer.email`). Les fichiers sont générés dans tous les cas : le vendeur peut les télécharger via `/tickets/{id}/files/{kind}`." }
+    PublicOrderCreate:
+      type: object
+      required: [buyer, tickets, acceptedTerms]
+      properties:
+        buyer: { $ref: '#/components/schemas/OnlineBuyer' }
+        tickets: { type: array, minItems: 1, maxItems: 10, items: { $ref: '#/components/schemas/Holder' }, description: "Un élément par billet (maximum par commande : voir `maxPerOrder` de la page publique)" }
+        captchaToken: { type: string, maxLength: 2048, description: Jeton Cloudflare Turnstile (obligatoire en production) }
+        acceptedTerms: { type: boolean, enum: [true] }
+      example:
+        buyer: { firstName: Koffi, lastName: Ahoussou, email: koffi@exemple.bj, phone: '+229 01 95 78 95 13' }
+        tickets:
+          - { categoryId: 3f2b1c8e-0000-4000-8000-000000000001, firstName: Koffi, lastName: Ahoussou, email: koffi@exemple.bj }
+          - { categoryId: 3f2b1c8e-0000-4000-8000-000000000001, firstName: Aïcha, lastName: Hounkpatin }
+        captchaToken: 0.abcdef…
+        acceptedTerms: true
+
+    # ───────── Public ─────────
+    PublicCategory:
+      type: object
+      required: [id, name, priceXof, conditions, availability, remaining, maxPerOrder]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        priceXof: { type: integer }
+        conditions: { type: string, nullable: true }
+        availability: { $ref: '#/components/schemas/CategoryAvailability' }
+        remaining: { type: integer, maximum: 10, description: Plafonné à 10 }
+        maxPerOrder: { type: integer }
+    PublicEvent:
+      type: object
+      required: [slug, title, category, accentColor, description, status, salesStatus, startsAt, endsAt, venueName, city, posters, programme, organizers, categories, maxPerOrder, contactEmail, contactPhone, practicalInfo, ticketTerms, refundPolicy, infoSources, faq, og]
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        category: { $ref: '#/components/schemas/EventCategory', description: "Étiquette « Conférence » de la maquette" }
+        accentColor: { type: string, nullable: true, pattern: '^#[0-9A-Fa-f]{6}$', description: "Couleur de l'événement (#RRGGBB) ; null : couleur par défaut" }
+        description: { type: string }
+        status: { type: string, enum: [PUBLISHED, CLOSED, CANCELLED] }
+        salesStatus: { $ref: '#/components/schemas/SalesStatus' }
+        startsAt: { type: string, format: date-time, nullable: true }
+        endsAt: { type: string, format: date-time, nullable: true }
+        venueName: { type: string }
+        city: { type: string }
+        posters:
+          type: array
+          items: { type: object, required: [url, isCover], properties: { url: { type: string, format: uri }, isCover: { type: boolean } } }
+        programme: { type: array, items: { $ref: '#/components/schemas/ProgrammeItem' } }
+        organizers: { type: array, items: { $ref: '#/components/schemas/Organizer' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/PublicCategory' } }
+        maxPerOrder: { type: integer }
+        contactEmail: { type: string, nullable: true }
+        contactPhone: { type: string, nullable: true, description: "Numéro du bouton « Écrire sur WhatsApp » (lien `https://wa.me/<chiffres>`) : celui de l'événement, sinon celui de l'organisation ; `null` seulement si aucun n'est configuré (masquer alors le bouton)" }
+        practicalInfo: { type: string, description: "Section « Infos pratiques ». **Jamais vide** : texte de l'organisateur, sinon texte général JCI" }
+        ticketTerms: { type: string, description: "Section « Conditions d'utilisation du billet ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
+        refundPolicy: { type: string, description: "Section « Annulation et remboursement ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
+        infoSources:
+          type: object
+          required: [practicalInfo, ticketTerms, refundPolicy]
+          description: "D'où vient chaque texte : `event` (rédigé pour cet événement) ou `default` (texte général JCI)"
+          properties:
+            practicalInfo: { type: string, enum: [event, default] }
+            ticketTerms: { type: string, enum: [event, default] }
+            refundPolicy: { type: string, enum: [event, default] }
+        faq:
+          type: array
+          description: "Questions fréquentes générales JCI, adaptées à l'événement (durée de réservation, maximum de billets par commande, contact). À afficher en accordéon sous « Informations »."
+          items:
+            type: object
+            required: [question, answer]
+            properties: { question: { type: string }, answer: { type: string } }
+        og:
+          type: object
+          required: [title, description, imageUrl]
+          description: Valeurs des balises Open Graph (aperçu WhatsApp / Facebook)
+          properties:
+            title: { type: string }
+            description: { type: string }
+            imageUrl: { type: string, format: uri, nullable: true }
+    PublicOrderCreated:
+      type: object
+      required: [reference, accessToken, amountXof, reservedUntil, checkoutUrl]
+      properties:
+        reference: { type: string, example: CMD-0012 }
+        accessToken: { type: string, description: "Secret de suivi de la commande : à garder côté navigateur pour `GET /public/orders/{reference}`" }
+        amountXof: { type: integer }
+        reservedUntil: { type: string, format: date-time, nullable: true, description: Fin de la réservation des places }
+        checkoutUrl: { type: string, format: uri, nullable: true, description: "Page de paiement FedaPay : y rediriger l'acheteur" }
+    PublicOrderStatus:
+      type: object
+      required: [reference, status, eventTitle, amountXof, reservedUntil, message, tickets]
+      properties:
+        reference: { type: string }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        eventTitle: { type: string }
+        amountXof: { type: integer }
+        reservedUntil: { type: string, format: date-time, nullable: true, description: "Renseigné tant que les places sont réservées" }
+        message: { type: string, nullable: true, description: Texte prêt à afficher selon le statut }
+        tickets:
+          type: array
+          description: |
+            Présents uniquement quand `status = PAID`. Les fichiers sont générés quelques secondes après le paiement : tant que `filesReady` vaut `false`,
+            les trois liens sont `null` (continuer d'interroger). Les liens sont des **URL signées valables 15 minutes** : ne pas les mettre en cache ; ils sont renouvelés à chaque appel.
+          items:
+            type: object
+            required: [number, holderName, category, filesReady, pdfUrl, imageUrl, shareVisualUrl]
+            properties:
+              number: { type: string, example: JCI-2026-000001 }
+              holderName: { type: string }
+              category: { type: string }
+              filesReady: { type: boolean }
+              pdfUrl: { type: string, format: uri, nullable: true, description: "Billet à imprimer (PDF)" }
+              imageUrl: { type: string, format: uri, nullable: true, description: "Billet pour téléphone (PNG haute définition)" }
+              shareVisualUrl: { type: string, format: uri, nullable: true, description: "Visuel « J'y serai ! » à publier sur WhatsApp / Facebook (sans QR code)" }
+    PublicTicket:
+      type: object
+      required: [eventTitle, startsAt, venueName, category, holderShortName, status]
+      properties:
+        eventTitle: { type: string }
+        startsAt: { type: string, format: date-time, nullable: true }
+        venueName: { type: string }
+        category: { type: string }
+        holderShortName: { type: string, example: "Koffi A." }
+        status: { type: string, enum: [VALID, USED, CANCELLED] }
