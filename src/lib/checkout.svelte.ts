@@ -22,7 +22,8 @@ class Checkout {
   qty = $state<Record<string, number>>({});
   buyer = $state<Buyer>({ firstName: '', lastName: '', phone: '', email: '' });
   holders = $state<Holder[]>([]);
-  forMe = $state(true);
+  /** Index du billet destiné à l'acheteur (« Ce billet est pour moi »), -1 si aucun. */
+  meIdx = $state(0);
   errors = $state<Record<string, string>>({});
   /** Clé d'idempotence : réutilisée tant que le contenu de la commande ne change pas. */
   idemKey = newKey();
@@ -40,7 +41,7 @@ class Checkout {
         this.qty = d.qty ?? {};
         this.buyer = { ...this.buyer, ...d.buyer };
         this.holders = d.holders ?? [];
-        this.forMe = d.forMe ?? true;
+        this.meIdx = typeof d.meIdx === 'number' ? d.meIdx : d.forMe === false ? -1 : 0;
         this.idemKey = d.idemKey ?? this.idemKey;
         this.keySig = d.keySig ?? '';
         this.keyAt = d.keyAt ?? 0;
@@ -54,14 +55,14 @@ class Checkout {
     try {
       sessionStorage.setItem(
         `jci:checkout:${this.slug}`,
-        JSON.stringify({ qty: this.qty, buyer: this.buyer, holders: this.holders, forMe: this.forMe, idemKey: this.idemKey, keySig: this.keySig, keyAt: this.keyAt, cats: this.cats })
+        JSON.stringify({ qty: this.qty, buyer: this.buyer, holders: this.holders, meIdx: this.meIdx, idemKey: this.idemKey, keySig: this.keySig, keyAt: this.keyAt, cats: this.cats })
       );
     } catch { /* ignoré */ }
   }
 
   /** Nouvel achat : panier vide, nouvelle clé d'idempotence (les coordonnées restent pré-remplies). */
   clear() {
-    this.qty = {}; this.holders = []; this.errors = {}; this.forMe = true;
+    this.qty = {}; this.holders = []; this.errors = {}; this.meIdx = 0;
     this.idemKey = newKey(); this.keySig = ''; this.keyAt = 0;
     try { sessionStorage.removeItem(`jci:checkout:${this.slug}`); } catch { /* ignoré */ }
   }

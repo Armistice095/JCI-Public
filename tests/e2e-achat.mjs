@@ -45,7 +45,7 @@ await p.getByRole('button', { name: 'Continuer' }).click(); await p.waitForURL('
 
 // 2) coordonnées
 await p.waitForSelector('h1:has-text("Vos coordonnées")');
-assert.equal(await p.locator('.card h3').allInnerTexts().then((a) => a.join('|')), 'Acheteur|Billet 1, Standard|Billet 2, Standard|Billet 3, VIP'); ok('un bloc par billet, dans l’ordre');
+assert.equal(await p.locator('form .card h3').allInnerTexts().then((a) => a.join('|')), 'Acheteur|Billet 1|Billet 2|Billet 3'); ok('un bloc par billet, dans l’ordre');
 await p.getByRole('button', { name: 'Continuer' }).click();
 assert.equal(await p.locator('.err').first().innerText(), 'Champ obligatoire.');
 assert.equal(await p.evaluate(() => document.activeElement.id), 'bp'); ok('validation : erreurs + focus sur le 1er champ');
@@ -55,9 +55,11 @@ await p.fill('#bn', 'Ahoussou'); await p.fill('#bt', '12'); await p.fill('#bm', 
 await p.getByRole('button', { name: 'Continuer' }).click();
 assert.equal(await p.locator('#bt-e').innerText(), 'Numéro de téléphone invalide.'); assert.equal(await p.locator('#bm-e').innerText(), 'Adresse e-mail invalide.'); ok('téléphone / e-mail invalides');
 await p.fill('#bt', '+229 01 97 00 00 00'); await p.fill('#bm', 'koffi@exemple.bj');
-assert.equal(await p.inputValue('#pp0'), 'Koffi'); assert.equal(await p.inputValue('#pn0'), 'Ahoussou'); ok('« Ce billet est pour moi » : recopie l’acheteur');
-await p.fill('#pp0', 'Autre'); assert.equal(await p.locator('.chk input').isChecked(), false); ok('modifier le bénéficiaire décoche la case');
-await p.fill('#pp0', 'Koffi'); await p.fill('#pp1', 'Afi'); await p.fill('#pn1', 'Dossou'); await p.fill('#pp2', 'Yao'); await p.fill('#pn2', 'Dossou');
+assert.match(await p.locator('.me').first().innerText(), /Koffi Ahoussou/); assert.equal(await p.locator('.sw').first().getAttribute('aria-checked'), 'true'); ok('« Ce billet est pour moi » : recopie l’acheteur');
+await p.locator('.sw').first().click(); assert.equal(await p.locator('.sw').first().getAttribute('aria-checked'), 'false'); assert.equal(await p.inputValue('#pp0'), ''); ok('désactiver l’interrupteur ouvre les champs du participant');
+await p.locator('.sw').first().click(); await p.locator('.sw').nth(1).click(); assert.equal(await p.locator('.sw').first().getAttribute('aria-checked'), 'false'); assert.match(await p.locator('.me').innerText(), /Koffi Ahoussou/); ok('un seul billet « pour moi » à la fois');
+await p.locator('.sw').nth(1).click();
+await p.fill('#pp0', 'Koffi'); await p.fill('#pn0', 'Ahoussou'); await p.fill('#pp1', 'Afi'); await p.fill('#pn1', 'Dossou'); await p.fill('#pp2', 'Yao'); await p.fill('#pn2', 'Dossou');
 await p.getByRole('button', { name: 'Continuer' }).click(); await p.waitForURL('**/recap');
 
 // 3) recap
