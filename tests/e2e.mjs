@@ -25,8 +25,10 @@ assert.equal(await p.locator('.bar a.btn').getAttribute('href'), '/evenements/le
 assert.equal(await p.locator('a[href^="https://wa.me/"]').getAttribute('href'), 'https://wa.me/2290197000000'); ok('WhatsApp wa.me chiffres');
 const csp = (await (await fetch(B + '/evenements/leadership-impact')).headers.get('content-security-policy'));
 assert.match(csp, /connect-src 'self' https:\/\/challenges\.cloudflare\.com http:\/\/127\.0\.0\.1:4010/); assert.doesNotMatch(csp, /connect-src[^;]*\shttps:(;|\s)/); ok('CSP : origine de l’API lue dans PUBLIC_API_URL, plus de https: générique');
-assert.equal(await p.locator('details').count(), 5); // 3 informations + 2 FAQ
-assert.equal(await p.locator('h2:has-text("Questions fréquentes")').count(), 1); ok('FAQ en accordéon sous Informations');
+assert.equal(await p.locator('details').count(), 5); // une seule liste : 3 rubriques + 2 questions, dans l'ordre
+assert.equal(await p.locator('details summary').first().innerText(), 'Infos pratiques');
+assert.equal(await p.locator('h2:has-text("Informations")').count(), 0);
+assert.equal(await p.locator('h2:has-text("Questions fréquentes")').count(), 1); ok('section unique « Questions fréquentes » (plus de section Informations)');
 const hits = (await calls()).filter((c) => c.method === 'POST' && c.path.endsWith('/views'));
 assert.equal(hits.length, 1); ok('1 seule vue, comptée par le navigateur');
 assert.ok((await calls()).filter((c) => c.method === 'GET').length <= 1);
@@ -84,7 +86,7 @@ for (const [slug, [pill, btn]] of Object.entries(exp)) {
 }
 // 4) minimal : sections masquées
 await p.goto(`${B}/evenements/minimal`, { waitUntil: 'networkidle' });
-assert.equal(await p.locator('details').count(), 3); assert.equal(await p.locator('h2:has-text("Questions fréquentes")').count(), 0); assert.equal(await p.locator('a[href^="https://wa.me"]').count(), 0);
+assert.equal(await p.locator('details').count(), 0); assert.equal(await p.locator('h2:has-text("Questions fréquentes")').count(), 0); assert.equal(await p.locator('a[href^="https://wa.me"]').count(), 0);
 assert.equal(await p.locator('.car').count(), 0); assert.equal(await p.locator('h2:has-text("Programme")').count(), 0);
 assert.equal(await p.locator('h2:has-text("Organisé par")').count(), 0); assert.equal(await p.locator('h2:has-text("À propos")').count(), 0);
 assert.equal(await p.evaluate(() => document.querySelector('#v').style.getPropertyValue('--acc')), '');

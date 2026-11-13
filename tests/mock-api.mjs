@@ -22,7 +22,7 @@ const base = (o = {}) => ({
   maxPerOrder: 5, contactEmail: 'contact@exemple.bj', contactPhone: '+229 01 97 00 00 00',
   practicalInfo: 'Ouverture des portes à 07h30.', ticketTerms: 'Billet personnel.', refundPolicy: 'Remboursement si annulation.',
   infoSources: { practicalInfo: 'event', ticketTerms: 'default', refundPolicy: 'default' },
-  faq: [{ question: 'Combien de temps mes places sont-elles réservées ?', answer: '15 minutes.' }, { question: 'Puis-je acheter plusieurs billets ?', answer: 'Oui, 5 au maximum.' }],
+  faq: [{ question: 'Infos pratiques', answer: 'Ouverture des portes à 07h30.' }, { question: 'Conditions d’utilisation du billet', answer: 'Billet personnel.' }, { question: 'Annulation et remboursement', answer: 'Remboursement si annulation.' }, { question: 'Combien de temps mes places sont-elles réservées ?', answer: '15 minutes.' }, { question: 'Puis-je acheter plusieurs billets ?', answer: 'Oui, 5 au maximum.' }],
   og: { title: 'Leadership & Impact · JCI Comé Excellence', description: 'Samedi 28 novembre 2026 à Comé', imageUrl: `http://127.0.0.1:${PORT}/img/p1.svg` },
   ...o
 });

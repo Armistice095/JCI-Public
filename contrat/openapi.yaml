@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: JCI Comé Labs — API Événements & Billetterie
-  version: 0.10.0
+  version: 0.12.0
   description: |
     **Contrat v0.7.0 — uniquement ce qui est déjà en place côté backend** (50 routes). Les routes à venir sont listées
     dans `docs/GUIDE_FRONTEND.md` (section « Feuille de route »). Ce contrat est vérifié automatiquement contre les
@@ -38,6 +38,7 @@ tags:
   - { name: Tableau de bord, description: "Écran d'accueil de l'administration : KPI, ventes, événements proches" }
   - { name: Contrôle d'accès, description: "Application JCI Stafs : scan des billets à l'entrée et compteurs de présence" }
   - { name: Participants, description: "Liste, recherche, filtres, export et fiche billet d'un participant (onglet « Participants »)" }
+  - { name: Rapports, description: "Documents PDF d'un événement : liste des participants, rapport de billetterie, liste des présences, journal des paiements (onglet « Documents »)" }
   - { name: Billets, description: "Fichiers des billets (PDF, image, visuel de partage) et renvoi par e-mail" }
   - { name: Public, description: "Sans authentification : page publique, achat, suivi de commande" }
   - { name: Interne, description: "Ne pas appeler depuis une interface" }
@@ -630,6 +631,48 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/Validation' }
+  /events/{eventId}/reports:
+    get:
+      tags: [Rapports]
+      summary: Documents disponibles pour un événement (onglet « Documents »)
+      description: |
+        Permission `event.read` (404 hors périmètre). Retourne les quatre rapports, chacun avec `available` : `true` si l'utilisateur a le droit de le télécharger **et** que l'événement n'est pas un brouillon.
+        Afficher une carte par rapport ; désactiver ou masquer celles où `available` vaut `false`. `formats` ne contient que `pdf`.
+      parameters: [ { $ref: '#/components/parameters/EventId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ReportList' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{eventId}/reports/{kind}:
+    get:
+      tags: [Rapports]
+      summary: Télécharger un rapport PDF
+      description: |
+        Génère le PDF (A4, couverture, en-têtes et pieds de page) au moment de l'appel : les chiffres sont ceux de l'instant. Réponse : le **fichier** (`Content-Disposition: attachment`, nom du type `liste-participants-leadership-impact-20261113.pdf`), jamais mis en cache.
+        Chaque téléchargement est journalisé. Pour télécharger avec le jeton, utiliser `fetch` puis `blob()` (un lien `<a href>` n'envoie pas l'en-tête `Authorization`). Compter une à trois secondes ; limité à 20 par minute et par adresse IP.
+
+        | `kind` | Contenu | Permissions (sur l'événement) |
+        |---|---|---|
+        | `participants` | Fiche de l'événement, noms, téléphones et e-mails des inscrits | `report.view` + `participant.export` |
+        | `ticketing` | Ventes par catégorie, recettes, évolution, modes de paiement, présences | `report.view` + (`finance.view` ou `order.read`) |
+        | `attendance` | Bilan des entrées, affluence, scans valides, anomalies | `report.view` + `checkin.view` |
+        | `payments` | Bilan FedaPay, répartition par moyen, transactions, remboursements | `report.view` + (`finance.view` ou `order.read`) |
+
+        Erreurs : 404 hors périmètre ; 403 sans les permissions ci-dessus ; **409** `INVALID_STATE` pour un brouillon ; **422** si `kind` est inconnu ou si la liste dépasse **3 000 lignes** (le PDF serait inutilisable).
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [participants, ticketing, attendance, payments] } }
+      responses:
+        '200':
+          description: Fichier PDF à télécharger
+          headers: { Content-Disposition: { schema: { type: string }, description: 'attachment; filename="…pdf"' } }
+          content: { application/pdf: { schema: { type: string, format: binary } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /tickets/{ticketId}:
     get:
       tags: [Participants]
@@ -1543,6 +1586,21 @@ components:
         availability: { $ref: '#/components/schemas/CategoryAvailability' }
         remaining: { type: integer, maximum: 10, description: Plafonné à 10 }
         maxPerOrder: { type: integer }
+    ReportList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [kind, title, description, formats, available]
+            properties:
+              kind: { type: string, enum: [participants, ticketing, attendance, payments] }
+              title: { type: string, example: Liste des participants }
+              description: { type: string, example: "Noms, téléphones et e-mails des participants inscrits." }
+              formats: { type: array, items: { type: string, enum: [pdf] } }
+              available: { type: boolean, description: "L'utilisateur peut le télécharger et l'événement n'est pas un brouillon" }
     PublicEventCard:
       type: object
       required: [slug, title, category, accentColor, startsAt, endsAt, venueName, city, coverUrl, salesStatus, priceFromXof, soldOut, updatedAt]
@@ -1590,12 +1648,13 @@ components:
         maxPerOrder: { type: integer }
         contactEmail: { type: string, nullable: true }
         contactPhone: { type: string, nullable: true, description: "Numéro du bouton « Écrire sur WhatsApp » (lien `https://wa.me/<chiffres>`) : celui de l'événement, sinon celui de l'organisation ; `null` seulement si aucun n'est configuré (masquer alors le bouton)" }
-        practicalInfo: { type: string, description: "Section « Infos pratiques ». **Jamais vide** : texte de l'organisateur, sinon texte général JCI" }
-        ticketTerms: { type: string, description: "Section « Conditions d'utilisation du billet ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
-        refundPolicy: { type: string, description: "Section « Annulation et remboursement ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
+        practicalInfo: { type: string, deprecated: true, description: "**Déprécié** : déjà présent en tête de `faq`. Section « Infos pratiques ». Jamais vide : texte de l'organisateur, sinon texte général JCI" }
+        ticketTerms: { type: string, deprecated: true, description: "**Déprécié** : déjà présent dans `faq`. Section « Conditions d'utilisation du billet ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
+        refundPolicy: { type: string, deprecated: true, description: "**Déprécié** : déjà présent dans `faq`. Section « Annulation et remboursement ». Jamais vide (texte de l'organisateur, sinon texte JCI)" }
         infoSources:
           type: object
           required: [practicalInfo, ticketTerms, refundPolicy]
+          deprecated: true
           description: "D'où vient chaque texte : `event` (rédigé pour cet événement) ou `default` (texte général JCI)"
           properties:
             practicalInfo: { type: string, enum: [event, default] }
@@ -1603,7 +1662,7 @@ components:
             refundPolicy: { type: string, enum: [event, default] }
         faq:
           type: array
-          description: "Questions fréquentes générales JCI, adaptées à l'événement (durée de réservation, maximum de billets par commande, contact). À afficher en accordéon sous « Informations »."
+          description: "**Section unique « Questions fréquentes »**, à afficher en un seul accordéon. Elle commence par les trois rubriques d'information (« Infos pratiques », « Conditions d'utilisation du billet », « Annulation et remboursement » : texte de l'organisateur, sinon texte général JCI), suivies des questions générales JCI adaptées à l'événement (durée de réservation, maximum par commande, contact ; une question « justificatif » si une catégorie en demande). Il n'y a plus de section « Informations » à part."
           items:
             type: object
             required: [question, answer]

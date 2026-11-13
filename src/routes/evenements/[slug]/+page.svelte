@@ -23,13 +23,6 @@
     Math.min(...e.categories.filter((c) => c.availability === 'AVAILABLE').map((c) => c.priceXof))
   );
   const whatsapp = $derived(whatsappUrl(e.contactPhone));
-  const infos = $derived(
-    [
-      { title: 'Infos pratiques', text: e.practicalInfo },
-      { title: 'Conditions d’utilisation du billet', text: e.ticketTerms },
-      { title: 'Annulation et remboursement', text: e.refundPolicy }
-    ].filter((s) => s.text && s.text.trim())
-  );
 
   /** Une seule vue par chargement, dans le navigateur uniquement (jamais pendant le rendu serveur : les robots gonfleraient le compteur). */
   onMount(() => {
@@ -96,19 +89,10 @@
         </section>
       {/if}
 
-      {#if infos.length}
-        <section>
-          <h2>Informations</h2>
-          {#each infos as s}
-            <details><summary>{s.title}</summary><p class="txt">{s.text}</p></details>
-          {/each}
-        </section>
-      {/if}
-
       {#if e.faq.length}
         <section>
           <h2>Questions fréquentes</h2>
-          {#each e.faq as f}
+          {#each e.faq as f (f.question)}
             <details><summary>{f.question}</summary><p class="txt">{f.answer}</p></details>
           {/each}
         </section>

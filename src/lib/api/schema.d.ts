@@ -1858,6 +1858,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/{eventId}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Documents disponibles pour un événement (onglet « Documents »)
+         * @description Permission `event.read` (404 hors périmètre). Retourne les quatre rapports, chacun avec `available` : `true` si l'utilisateur a le droit de le télécharger **et** que l'événement n'est pas un brouillon.
+         *     Afficher une carte par rapport ; désactiver ou masquer celles où `available` vaut `false`. `formats` ne contient que `pdf`.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: components["parameters"]["EventId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReportList"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                404: components["responses"]["NotFound"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{eventId}/reports/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Télécharger un rapport PDF
+         * @description Génère le PDF (A4, couverture, en-têtes et pieds de page) au moment de l'appel : les chiffres sont ceux de l'instant. Réponse : le **fichier** (`Content-Disposition: attachment`, nom du type `liste-participants-leadership-impact-20261113.pdf`), jamais mis en cache.
+         *     Chaque téléchargement est journalisé. Pour télécharger avec le jeton, utiliser `fetch` puis `blob()` (un lien `<a href>` n'envoie pas l'en-tête `Authorization`). Compter une à trois secondes ; limité à 20 par minute et par adresse IP.
+         *
+         *     | `kind` | Contenu | Permissions (sur l'événement) |
+         *     |---|---|---|
+         *     | `participants` | Fiche de l'événement, noms, téléphones et e-mails des inscrits | `report.view` + `participant.export` |
+         *     | `ticketing` | Ventes par catégorie, recettes, évolution, modes de paiement, présences | `report.view` + (`finance.view` ou `order.read`) |
+         *     | `attendance` | Bilan des entrées, affluence, scans valides, anomalies | `report.view` + `checkin.view` |
+         *     | `payments` | Bilan FedaPay, répartition par moyen, transactions, remboursements | `report.view` + (`finance.view` ou `order.read`) |
+         *
+         *     Erreurs : 404 hors périmètre ; 403 sans les permissions ci-dessus ; **409** `INVALID_STATE` pour un brouillon ; **422** si `kind` est inconnu ou si la liste dépasse **3 000 lignes** (le PDF serait inutilisable).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    eventId: components["parameters"]["EventId"];
+                    kind: "participants" | "ticketing" | "attendance" | "payments";
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Fichier PDF à télécharger */
+                200: {
+                    headers: {
+                        /** @description attachment; filename="…pdf" */
+                        "Content-Disposition"?: string;
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/pdf": string;
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                404: components["responses"]["NotFound"];
+                409: components["responses"]["Conflict"];
+                422: components["responses"]["Validation"];
+                429: components["responses"]["RateLimited"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tickets/{ticketId}": {
         parameters: {
             query?: never;
@@ -3293,6 +3397,19 @@ export interface components {
             remaining: number;
             maxPerOrder: number;
         };
+        ReportList: {
+            data: {
+                /** @enum {string} */
+                kind: "participants" | "ticketing" | "attendance" | "payments";
+                /** @example Liste des participants */
+                title: string;
+                /** @example Noms, téléphones et e-mails des participants inscrits. */
+                description: string;
+                formats: "pdf"[];
+                /** @description L'utilisateur peut le télécharger et l'événement n'est pas un brouillon */
+                available: boolean;
+            }[];
+        };
         PublicEventCard: {
             /** @description Adresse de la page : /evenements/{slug} */
             slug: string;
@@ -3354,13 +3471,25 @@ export interface components {
             contactEmail: string | null;
             /** @description Numéro du bouton « Écrire sur WhatsApp » (lien `https://wa.me/<chiffres>`) : celui de l'événement, sinon celui de l'organisation ; `null` seulement si aucun n'est configuré (masquer alors le bouton) */
             contactPhone: string | null;
-            /** @description Section « Infos pratiques ». **Jamais vide** : texte de l'organisateur, sinon texte général JCI */
+            /**
+             * @deprecated
+             * @description **Déprécié** : déjà présent en tête de `faq`. Section « Infos pratiques ». Jamais vide : texte de l'organisateur, sinon texte général JCI
+             */
             practicalInfo: string;
-            /** @description Section « Conditions d'utilisation du billet ». Jamais vide (texte de l'organisateur, sinon texte JCI) */
+            /**
+             * @deprecated
+             * @description **Déprécié** : déjà présent dans `faq`. Section « Conditions d'utilisation du billet ». Jamais vide (texte de l'organisateur, sinon texte JCI)
+             */
             ticketTerms: string;
-            /** @description Section « Annulation et remboursement ». Jamais vide (texte de l'organisateur, sinon texte JCI) */
+            /**
+             * @deprecated
+             * @description **Déprécié** : déjà présent dans `faq`. Section « Annulation et remboursement ». Jamais vide (texte de l'organisateur, sinon texte JCI)
+             */
             refundPolicy: string;
-            /** @description D'où vient chaque texte : `event` (rédigé pour cet événement) ou `default` (texte général JCI) */
+            /**
+             * @deprecated
+             * @description D'où vient chaque texte : `event` (rédigé pour cet événement) ou `default` (texte général JCI)
+             */
             infoSources: {
                 /** @enum {string} */
                 practicalInfo: "event" | "default";
@@ -3369,7 +3498,7 @@ export interface components {
                 /** @enum {string} */
                 refundPolicy: "event" | "default";
             };
-            /** @description Questions fréquentes générales JCI, adaptées à l'événement (durée de réservation, maximum de billets par commande, contact). À afficher en accordéon sous « Informations ». */
+            /** @description **Section unique « Questions fréquentes »**, à afficher en un seul accordéon. Elle commence par les trois rubriques d'information (« Infos pratiques », « Conditions d'utilisation du billet », « Annulation et remboursement » : texte de l'organisateur, sinon texte général JCI), suivies des questions générales JCI adaptées à l'événement (durée de réservation, maximum par commande, contact ; une question « justificatif » si une catégorie en demande). Il n'y a plus de section « Informations » à part. */
             faq: {
                 question: string;
                 answer: string;
