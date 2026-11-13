@@ -2,7 +2,6 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Header from '$lib/components/Header.svelte';
-  import { shareEvent } from '$lib/share';
   import { pageState } from '$lib/event';
 
   let { data, children } = $props();
@@ -16,9 +15,10 @@
 
 <svelte:head><meta name="robots" content="noindex" /></svelte:head>
 
-<Header homeHref={home} onshare={() => shareEvent(data.event, page.url.origin + home)} />
-<main class="narrow">{@render children()}</main>
+<Header homeHref={home} secure />
+<main class:wide={/\/recap$/.test(page.url.pathname)}>{@render children()}</main>
 
 <style>
-  .narrow { max-width: 560px; margin: auto; }
+  main { max-width: 560px; margin: auto; }
+  main.wide { max-width: 1040px; }
 </style>

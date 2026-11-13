@@ -90,7 +90,7 @@
       {/if}
 
       {#if e.faq.length}
-        <section>
+        <section id="faq">
           <h2>Questions fréquentes</h2>
           {#each e.faq as f (f.question)}
             <details><summary>{f.question}</summary><p class="txt">{f.answer}</p></details>

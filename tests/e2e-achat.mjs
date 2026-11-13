@@ -61,14 +61,15 @@ await p.fill('#pp0', 'Koffi'); await p.fill('#pp1', 'Afi'); await p.fill('#pn1',
 await p.getByRole('button', { name: 'Continuer' }).click(); await p.waitForURL('**/recap');
 
 // 3) recap
-await p.waitForSelector('h1:has-text("Récapitulatif")');
-const t = await p.locator('.card').first().innerText();
-assert.match(t, new RegExp(`2 × Standard\\s*${F(6000)}`)); assert.match(t, new RegExp(`1 × VIP\\s*${F(10000)}`)); assert.match(t, new RegExp(`Total\\s*${F(16000)}`)); ok('lignes et total');
-assert.match(await p.locator('.card').nth(2).innerText(), /Afi Dossou\s*Standard/);
-assert.match(await p.locator('.note').innerText(), /redirigé vers FedaPay/);
+await p.waitForSelector('h1:has-text("Vérifiez votre commande")');
+const t = await p.locator('section[aria-label="Commande"]').innerText();
+assert.match(t, new RegExp(`Standard\\s*2 × ${F(3000)}\\s*${F(6000)}`)); assert.match(t, new RegExp(`VIP\\s*1 × ${F(10000)}\\s*${F(10000)}`)); assert.match(t, new RegExp(`Total\\s*${F(16000)}`)); ok('lignes et total');
+assert.match(await p.locator('section[aria-label="Participants"]').innerText(), /Afi Dossou\s*Standard/);
+assert.match(await p.locator('section[aria-label="Événement"]').innerText(), /Leadership/); ok('carte événement + participants');
+assert.match(await p.locator('.lead').innerText(), /page sécurisée FedaPay/);
+assert.match(await p.locator('.mob').innerText(), /Étape 3 sur 3/);
 await p.screenshot({ path: `${OUT}/12-recap.png` });
-await p.getByRole('button', { name: /^Payer/ }).click();
-assert.match(await p.locator('.err').innerText(), /accepter les conditions/); assert.equal((await orders()).length, 0); ok('conditions non cochées : pas d’appel');
+assert.equal(await p.getByRole('button', { name: /^Payer/ }).isDisabled(), true); assert.match(await p.locator('.need').first().innerText(), /Acceptez les conditions/); assert.equal((await orders()).length, 0); ok('conditions non cochées : bouton désactivé, pas d’appel');
 await p.locator('.chk input').check();
 await p.getByRole('button', { name: /^Payer/ }).click();
 await p.waitForSelector('#fed'); assert.equal(p.url(), 'https://checkout.fedapay.test/pay/CMD-0001'); ok('redirection vers checkoutUrl (FedaPay)');
@@ -81,7 +82,7 @@ ok('corps de la commande conforme (acheteur, 3 bénéficiaires, Turnstile, accep
 const key1 = o[0].key;
 
 // 4) retour arrière puis nouveau paiement : même clé
-await p.goBack(); await p.waitForSelector('h1:has-text("Récapitulatif")');
+await p.goBack(); await p.waitForSelector('h1:has-text("Vérifiez votre commande")');
 await p.locator('.chk input').check(); await p.getByRole('button', { name: /^Payer/ }).click(); await p.waitForSelector('#fed');
 o = await orders(); assert.equal(o.length, 2); assert.equal(o[1].key, key1); assert.equal(p.url(), 'https://checkout.fedapay.test/pay/CMD-0001'); ok('retour + nouveau clic : même Idempotency-Key → même commande');
 assert.notEqual(o[0].body.captchaToken, o[1].body.captchaToken); ok('jeton Turnstile neuf à chaque envoi');
@@ -90,7 +91,7 @@ await p.goto(B + '/evenements/leadership-impact/billets'); await p.waitForSelect
 assert.match(await p.locator('.bar').innerText(), /3 billets/); ok('panier conservé (sessionStorage)');
 await add('Standard').click(); await p.getByRole('button', { name: 'Continuer' }).click(); await p.waitForURL('**/coordonnees');
 await p.fill('#pp3', 'Zoé'); await p.fill('#pn3', 'Dossou'); await p.getByRole('button', { name: 'Continuer' }).click(); await p.waitForURL('**/recap');
-await p.reload(); await p.waitForSelector('h1:has-text("Récapitulatif")'); assert.match(await p.locator('.card').first().innerText(), /3 × Standard/); ok('rechargement du récap : données conservées');
+await p.reload(); await p.waitForSelector('h1:has-text("Vérifiez votre commande")'); assert.match(await p.locator('section[aria-label="Commande"]').innerText(), /3 × /); ok('rechargement du récap : données conservées');
 await p.locator('.chk input').check(); await p.getByRole('button', { name: /^Payer/ }).click(); await p.waitForSelector('#fed');
 o = await orders(); assert.equal(o.length, 3); assert.notEqual(o[2].key, key1); ok('contenu modifié → nouvelle Idempotency-Key');
 

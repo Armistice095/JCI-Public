@@ -8,17 +8,23 @@
   import Turnstile from '$lib/components/Turnstile.svelte';
   import { createApi, unwrap, ApiError, type Schemas } from '$lib/api/client';
   import { checkoutFor } from '$lib/checkout.svelte';
-  import { formatXof } from '$lib/format';
+  import Icon from '$lib/components/Icon.svelte';
+  import { formatXof, formatWhen } from '$lib/format';
+  import { categoryLabel, orderedPosters } from '$lib/event';
   import { safeCheckoutUrl, rememberOrder } from '$lib/payment';
 
   let { data } = $props();
   const slug = $derived(data.event.slug);
   const co = $derived(checkoutFor(slug));
   const siteKey = env.PUBLIC_TURNSTILE_SITE_KEY ?? '';
+  const ev = $derived(data.event);
+  const when = $derived(formatWhen(ev.startsAt, ev.endsAt));
+  const cover = $derived(orderedPosters(ev)[0]);
+  const initials = (f: string, l: string) => ((f.trim()[0] ?? '') + (l.trim()[0] ?? '')).toUpperCase();
+  const nLabel = $derived(co.count + (co.count > 1 ? ' billets' : ' billet'));
 
   let ready = $state(false);
   let accepted = $state(false);
-  let acceptedErr = $state('');
   let loading = $state(false);
   let problem = $state<{ message: string; action?: { label: string; href: string } } | null>(null);
   let token: string | null = null;
@@ -51,8 +57,7 @@
     ev.preventDefault();
     if (loading) return;
     problem = null;
-    if (!accepted) { acceptedErr = 'Vous devez accepter les conditions pour continuer.'; return; }
-    acceptedErr = '';
+    if (!accepted) return; // le bouton est désactivé tant que la case n'est pas cochée
     loading = true;
     try {
       const body: Schemas['PublicOrderCreate'] = { ...co.payload(), captchaToken: await captcha() };
@@ -103,55 +108,160 @@
 
 {#if ready}
   <StepTop back={`/evenements/${slug}/coordonnees`} step={3} />
-  <h1>Récapitulatif</h1>
 
-  {#if problem}
-    <div class="ban" role="alert">
-      {problem.message}
-      {#if problem.action}<br /><a href={problem.action.href}>{problem.action.label}</a>{/if}
+  <div class="wrap">
+    <div class="main">
+      <div>
+        <h1>Vérifiez votre commande</h1>
+        <p class="lead">Dernière étape : vous paierez ensuite sur la page sécurisée FedaPay.</p>
+      </div>
+
+      {#if problem}
+        <div class="ban" role="alert">
+          {problem.message}
+          {#if problem.action}<br /><a href={problem.action.href}>{problem.action.label}</a>{/if}
+        </div>
+      {/if}
+
+      <section class="card evc" aria-label="Événement">
+        {#if cover}
+          <img class="poster" src={cover.url} alt="" width="92" height="116" />
+        {:else}
+          <div class="poster ph" aria-hidden="true"><Icon name="cal" /></div>
+        {/if}
+        <div>
+          <span class="pill">{categoryLabel[ev.category]}</span>
+          <h2>{ev.title}</h2>
+          {#if when}<div class="meta"><Icon name="cal" />{when.title}{when.sub ? ` · ${when.sub}` : ''}</div>{/if}
+          {#if ev.venueName || ev.city}<div class="meta"><Icon name="pin" />{[ev.venueName, ev.city].filter(Boolean).join(', ')}</div>{/if}
+        </div>
+      </section>
+
+      <section class="card ordm" aria-label="Commande">
+        <div class="ch"><h3>Votre commande</h3></div>
+        {#each co.lines as l}<div class="sum"><div><b>{l.cat.name}</b><small>{l.n} × {formatXof(l.cat.priceXof)}</small></div><b>{formatXof(l.cat.priceXof * l.n)}</b></div>{/each}
+        <div class="sum t"><span>Total</span><b>{formatXof(co.total)}</b></div>
+      </section>
+
+      <section class="card" aria-label="Acheteur">
+        <div class="ch"><h3>Acheteur</h3><a class="edit" href={`/evenements/${slug}/coordonnees`}>Modifier</a></div>
+        <dl class="kv">
+          <dt>Nom</dt><dd>{co.buyer.firstName.trim()} {co.buyer.lastName.trim()}</dd>
+          <dt>Téléphone</dt><dd>{co.buyer.phone.trim()}</dd>
+          <dt>E-mail</dt><dd>{co.buyer.email.trim()}</dd>
+        </dl>
+        <p class="hint"><Icon name="mail" />Vos billets seront envoyés à cette adresse e-mail.</p>
+      </section>
+
+      <section class="card" aria-label="Participants">
+        <div class="ch"><h3>Participants · {co.tickets.length}</h3><a class="edit" href={`/evenements/${slug}/coordonnees`}>Modifier</a></div>
+        <ul class="pl">
+          {#each co.tickets as c, i}
+            <li class="pr">
+              <span class="av" aria-hidden="true">{initials(co.holders[i]?.firstName ?? '', co.holders[i]?.lastName ?? '')}</span>
+              <span class="pn">{co.holders[i]?.firstName.trim()} {co.holders[i]?.lastName.trim()}</span>
+              <span class="pill">{c.name}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+
+      <form id="f2" onsubmit={pay} novalidate>
+        <label class="chk">
+          <input type="checkbox" bind:checked={accepted} />
+          <span class="box" aria-hidden="true"><Icon name="chk" /></span>
+          <span class="t">J’accepte les <a href={`/evenements/${slug}#faq`} target="_blank" rel="noopener">conditions d’utilisation du billet</a>.</span>
+        </label>
+      </form>
+
+      {#if siteKey}
+        <Turnstile bind:this={ts} {siteKey} ontoken={(t) => { token = t; if (t) tokenError = false; }} onerror={() => (tokenError = true)} />
+      {/if}
     </div>
-  {/if}
 
-  <div class="card">
-    {#each co.lines as l}<div class="sum"><span>{l.n} × {l.cat.name}</span><span>{formatXof(l.cat.priceXof * l.n)}</span></div>{/each}
-    <div class="sum t"><span>Total</span><span>{formatXof(co.total)}</span></div>
+    <aside class="card side" aria-label="Votre commande">
+      <h3>Votre commande</h3>
+      {#each co.lines as l}<div class="sum"><div><b>{l.cat.name}</b><small>{l.n} × {formatXof(l.cat.priceXof)}</small></div><b>{formatXof(l.cat.priceXof * l.n)}</b></div>{/each}
+      <div class="sum t"><span>Total</span><b>{formatXof(co.total)}</b></div>
+      <Button type="submit" form="f2" block disabled={loading || !accepted} aria-busy={loading}>
+        {#if loading}Redirection…{:else}<Icon name="lock" />Payer {formatXof(co.total)}{/if}
+      </Button>
+      {#if !accepted}<p class="need">Acceptez les conditions pour continuer.</p>{/if}
+      <ul class="notes">
+        <li><Icon name="card" />Mobile Money (MTN, Moov) ou carte bancaire, sur la page FedaPay.</li>
+        <li><Icon name="clock" />Vos places sont retenues quelques minutes pour finaliser le paiement.</li>
+      </ul>
+    </aside>
   </div>
-  <div class="card">
-    <h3>Acheteur</h3>
-    <p style="margin: 0; color: var(--ink)">{co.buyer.firstName.trim()} {co.buyer.lastName.trim()}<br />{co.buyer.phone.trim()}<br />{co.buyer.email.trim()}</p>
+
+  <div class="mbar">
+    <BottomBar>
+      <div><small>Total</small><strong>{formatXof(co.total)}</strong></div>
+      <Button type="submit" form="f2" disabled={loading || !accepted} aria-busy={loading}>{loading ? 'Redirection…' : 'Payer'}</Button>
+    </BottomBar>
+    {#if !accepted}<p class="need nb">Acceptez les conditions pour continuer.</p>{/if}
   </div>
-  <div class="card">
-    <h3>Participants</h3>
-    {#each co.tickets as c, i}
-      <div class="sum"><span>{co.holders[i]?.firstName.trim()} {co.holders[i]?.lastName.trim()}</span><span>{c.name}</span></div>
-    {/each}
-  </div>
-
-  <form id="f2" onsubmit={pay} novalidate>
-    <label class="chk"><input type="checkbox" bind:checked={accepted} aria-invalid={acceptedErr ? 'true' : undefined} /> J’accepte les conditions d’utilisation du billet.</label>
-    {#if acceptedErr}<p class="err" role="alert">{acceptedErr}</p>{/if}
-  </form>
-
-  {#if siteKey}
-    <Turnstile bind:this={ts} {siteKey} ontoken={(t) => { token = t; if (t) tokenError = false; }} onerror={() => (tokenError = true)} />
-  {/if}
-  <p class="note" style="margin-top: 16px">Vous serez redirigé vers FedaPay pour payer par Mobile Money ou par carte.</p>
-
-  <BottomBar>
-    <div><small>Total</small><strong>{formatXof(co.total)}</strong></div>
-    <Button type="submit" form="f2" disabled={loading} aria-busy={loading}>{loading ? 'Redirection…' : `Payer ${formatXof(co.total)}`}</Button>
-  </BottomBar>
 {/if}
 
 <style>
-  .card { border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin: 0 0 16px; }
-  .card h3 { margin: 0 0 14px; font-size: 15px; }
-  .sum { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
-  .sum.t { border-top: 1px solid var(--line); font-weight: 800; font-size: 18px; margin-top: 8px; padding-top: 14px; }
-  .chk { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; font-size: 15px; }
-  .chk input { width: 22px; height: 22px; margin: 0; accent-color: var(--ink); flex: none; }
-  .note { background: var(--soft); border-radius: 10px; padding: 12px 14px; font-size: 14px; color: var(--mut); }
-  .ban { border: 1.5px solid var(--err); color: var(--err); border-radius: 10px; padding: 12px 14px; font-weight: 700; margin: 0 0 18px; }
+  h1 { margin: 4px 0 0; }
+  .lead { margin: 6px 0 0; color: var(--mut); }
+  .wrap { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+  .main { flex: 1 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .card { margin: 0; border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+  .side { flex: 0 0 360px; position: sticky; top: 24px; padding: 24px; display: none; }
+  .side h3 { margin: 0 0 14px; font-size: 18px; }
+  .ordm { display: block; }
+  .mbar { display: block; }
+  @media (min-width: 900px) {
+    .side { display: block; }
+    .ordm, .mbar { display: none; }
+    .card { padding: 22px 24px; border-radius: 18px; }
+  }
+  .evc { display: flex; gap: 14px; align-items: center; background: var(--soft); border-color: transparent; }
+  .poster { width: 64px; height: 80px; border-radius: 10px; flex: none; object-fit: cover; }
+  .poster.ph { background: linear-gradient(150deg, #3a2f9c, #1553b8); display: grid; place-items: center; color: #fff; }
+  .evc h2 { margin: 6px 0 2px; font-size: 17px; line-height: 1.25; }
+  .meta { display: flex; gap: 8px; align-items: flex-start; color: var(--mut); font-size: 13.5px; line-height: 1.4; }
+  .meta :global(.i) { width: 16px; height: 16px; margin-top: 2px; }
+  @media (min-width: 900px) { .poster { width: 92px; height: 116px; } .evc h2 { font-size: 21px; } .meta { font-size: 15px; } }
+  .pill { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 1px 10px; font-size: 12.5px; font-weight: 700; color: var(--mut); background: var(--bg); }
+  .ch { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
+  .ch h3 { margin: 0; font-size: 16px; }
+  .edit { color: var(--acc); font-weight: 700; font-size: 14px; text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; margin: -10px -4px; padding: 0 4px; }
+  .edit:hover { text-decoration: underline; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px; margin: 0; font-size: 14.5px; }
+  .kv dt { color: var(--mut); }
+  .kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .hint { margin: 12px 0 0; display: flex; gap: 8px; align-items: flex-start; color: var(--mut); font-size: 13.5px; }
+  .hint :global(.i) { width: 16px; height: 16px; margin-top: 2px; }
+  .pl { list-style: none; margin: 0; padding: 0; }
+  .pr { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .pr:first-child { border-top: 0; padding-top: 0; }
+  .pr:last-child { padding-bottom: 0; }
+  .av { width: 36px; height: 36px; border-radius: 50%; background: var(--soft); display: grid; place-items: center; font-weight: 800; font-size: 13px; color: var(--acc); flex: none; }
+  .pn { flex: 1; font-weight: 700; font-size: 14.5px; overflow-wrap: anywhere; }
+  .sum { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+  .sum small { display: block; color: var(--mut); font-size: 13.5px; }
+  .sum b { white-space: nowrap; }
+  .sum.t { display: flex; align-items: baseline; border-top: 1px dashed var(--line); margin: 10px 0 16px; padding-top: 14px; }
+  .sum.t span { font-weight: 700; }
+  .sum.t b { font-size: 26px; letter-spacing: -0.02em; }
+  .ordm .sum.t { margin-bottom: 0; }
+  .ordm .sum.t b { font-size: 22px; }
+  .chk { position: relative; display: flex; gap: 12px; align-items: flex-start; padding: 2px; cursor: pointer; font-size: 14.5px; }
+  .chk input { position: absolute; opacity: 0; width: 26px; height: 26px; margin: 0; cursor: pointer; }
+  .box { width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--mut); flex: none; margin-top: 1px; display: grid; place-items: center; color: transparent; background: var(--bg); }
+  .box :global(.i) { width: 16px; height: 16px; stroke-width: 3; }
+  .chk input:checked + .box { background: var(--acc); border-color: var(--acc); color: var(--bg); }
+  .chk input:focus-visible + .box { outline: 3px solid var(--acc); outline-offset: 2px; }
+  .chk .t { font-weight: 600; }
+  .chk a { color: var(--acc); }
+  .need { margin: 10px 0 0; text-align: center; color: var(--mut); font-size: 13px; }
+  .nb { position: fixed; inset: auto 0 calc(78px + env(safe-area-inset-bottom, 0px)) 0; margin: 0; z-index: 9; background: var(--bg); padding: 6px 0 0; }
+  .notes { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; color: var(--mut); font-size: 14px; }
+  .notes li { display: flex; gap: 10px; align-items: flex-start; }
+  .notes :global(.i) { width: 18px; height: 18px; margin-top: 1px; color: var(--ok); }
+  .ban { border: 1.5px solid var(--err); color: var(--err); border-radius: 10px; padding: 12px 14px; font-weight: 700; }
   .ban a { color: inherit; }
-  .err { color: var(--err); font-size: 13px; font-weight: 600; margin: 6px 0 0; }
 </style>
