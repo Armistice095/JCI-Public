@@ -1,6 +1,0 @@
-User-agent: *
-Allow: /evenements/
-Disallow: /commande/
-Disallow: /evenements/*/billets
-Disallow: /evenements/*/coordonnees
-Disallow: /evenements/*/recap
