@@ -10,6 +10,11 @@
   const image = $derived(og.imageUrl ?? origin + '/og-default.png');
   const ev = $derived(data.event);
   const prices = $derived(ev.categories.map((c) => c.priceXof));
+  // Disponibilité annoncée à Google : épuisé / ventes terminées → SoldOut, ventes pas encore ouvertes → PreOrder.
+  const soldOut = $derived(ev.categories.length > 0 && ev.categories.every((c) => c.remaining === 0));
+  const availability = $derived(
+    soldOut || ev.salesStatus === 'CLOSED' ? 'https://schema.org/SoldOut' : ev.salesStatus === 'NOT_OPEN' ? 'https://schema.org/PreOrder' : 'https://schema.org/InStock'
+  );
   // Données structurées schema.org/Event ; `<` échappé pour qu'aucun contenu ne ferme la balise script.
   const jsonLd = $derived(
     JSON.stringify({
@@ -24,7 +29,7 @@
       eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
       location: { '@type': 'Place', name: ev.venueName, address: { '@type': 'PostalAddress', addressLocality: ev.city, addressCountry: 'BJ' } },
       organizer: { '@type': 'Organization', name: 'JCI Comé Excellence', url: 'https://jcicomee.org' },
-      ...(prices.length ? { offers: { '@type': 'Offer', url: base, priceCurrency: 'XOF', price: Math.min(...prices), availability: 'https://schema.org/InStock' } } : {})
+      ...(prices.length ? { offers: { '@type': 'Offer', url: base, priceCurrency: 'XOF', price: Math.min(...prices), availability } } : {})
     }).replace(/</g, '\\u003c')
   );
 </script>
