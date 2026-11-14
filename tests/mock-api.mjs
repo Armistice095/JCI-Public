@@ -23,7 +23,7 @@ const base = (o = {}) => ({
   practicalInfo: 'Ouverture des portes à 07h30.', ticketTerms: 'Billet personnel.', refundPolicy: 'Remboursement si annulation.',
   infoSources: { practicalInfo: 'event', ticketTerms: 'default', refundPolicy: 'default' },
   faq: [{ question: 'Infos pratiques', answer: 'Ouverture des portes à 07h30.' }, { question: 'Conditions d’utilisation du billet', answer: 'Billet personnel.' }, { question: 'Annulation et remboursement', answer: 'Remboursement si annulation.' }, { question: 'Combien de temps mes places sont-elles réservées ?', answer: '15 minutes.' }, { question: 'Puis-je acheter plusieurs billets ?', answer: 'Oui, 5 au maximum.' }],
-  og: { title: 'Leadership & Impact · JCI Comé Excellence', description: 'Samedi 28 novembre 2026 à Comé', imageUrl: `http://127.0.0.1:${PORT}/img/p1.svg`, imageWidth: 1200, imageHeight: 630, imageType: 'image/jpeg' },
+  og: { title: 'Leadership & Impact · JCI Comé Excellence', description: 'Samedi 28 novembre 2026 à Comé', imageUrl: `http://127.0.0.1:${PORT}/img/og.jpg`, imageWidth: 1200, imageHeight: 630, imageType: 'image/jpeg' },
   ...o
 });
 const FIX = {
@@ -46,6 +46,7 @@ http.createServer((req, res) => {
   if (u.pathname === '/__calls') { res.writeHead(200, { ...cors, 'content-type': 'application/json' }); return res.end(JSON.stringify(calls)); }
   if (u.pathname === '/__reset') { calls.length = 0; res.writeHead(204, cors); return res.end(); }
   if (u.pathname.startsWith('/files/')) { res.writeHead(200, { ...cors, 'content-type': u.pathname.endsWith('.pdf') ? 'application/pdf' : 'image/svg+xml' }); return res.end(svg(10, 10, '#000')); }
+  if (u.pathname === '/img/og.jpg') { res.writeHead(200, { ...cors, 'content-type': 'image/jpeg' }); return res.end(Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64')); }
   const img = u.pathname.match(/^\/img\/(.+)\.svg$/);
   if (img) { const d = { p1: [400, 500, '#16103f'], p3: [400, 500, '#1553b8'], land: [800, 450, '#17703f'] }[img[1]]; res.writeHead(200, { ...cors, 'content-type': 'image/svg+xml' }); return res.end(svg(...d)); }
   const chunks = [];

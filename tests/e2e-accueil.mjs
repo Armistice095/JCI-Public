@@ -16,7 +16,10 @@ assert.equal(await p.locator('a.card[href="/evenements/soon"]').locator('text=Bi
 assert.ok((await p.locator('a.card').first().innerText()).includes('À partir de')); ok('prix « À partir de »');
 assert.match(await p.locator('link[rel=canonical]').getAttribute('href'), /\/$/); ok('canonical');
 const html = await (await fetch(B + '/evenements/leadership-impact')).text();
-assert.match(html, /og:image:width" content="1200"/); assert.match(html, /og:image:height" content="630"/); assert.match(html, /og:image:type" content="image\/jpeg"/); ok('aperçu du lien : og:image + dimensions + type (rendu serveur)');
+assert.match(html, /og:image:width" content="1200"/); assert.match(html, /og:image:height" content="630"/); assert.match(html, /og:image:type" content="image\/jpeg"/); assert.match(html, /og:image" content="[^"]*\/evenements\/leadership-impact\/apercu"/);
+const im = await fetch(B + '/evenements/leadership-impact/apercu'); assert.equal(im.status, 200); assert.equal(im.headers.get('content-type'), 'image/jpeg'); assert.match(im.headers.get('cache-control'), /s-maxage/);
+const nf = await fetch(B + '/evenements/minimal/apercu', { redirect: 'manual' }); assert.equal(nf.status, 302); assert.equal(nf.headers.get('location'), '/og-default.png');
+ok('aperçu du lien : og:image servie par notre domaine (+ dimensions, repli sur l’image JCI)');
 await p.locator('a.card[href="/evenements/leadership-impact"]').click();
 await p.waitForURL('**/evenements/leadership-impact'); ok('clic → page événement');
 

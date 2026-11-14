@@ -7,7 +7,8 @@
   const url = $derived(origin + page.url.pathname);
   const isTunnel = $derived(/\/(billets|coordonnees|recap)$/.test(page.url.pathname));
   const base = $derived(url.replace(/\/(billets|coordonnees|recap)$/, ''));
-  const image = $derived(og.imageUrl ?? origin + '/og-default.png');
+  // Image d'aperçu relayée par notre domaine (adresse stable) ; à défaut, l'image de marque.
+  const image = $derived(og.imageUrl ? `${origin}/evenements/${data.event.slug}/apercu` : origin + '/og-default.png');
   const ev = $derived(data.event);
   const prices = $derived(ev.categories.map((c) => c.priceXof));
   // Données structurées schema.org/Event ; `<` échappé pour qu'aucun contenu ne ferme la balise script.

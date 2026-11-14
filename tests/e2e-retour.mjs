@@ -37,13 +37,12 @@ await p.waitForSelector('text=Préparation de vos billets…', { state: 'detache
 await p.screenshot({ path: `${OUT}/21-paye.png` });
 const gets = (await calls()).filter((c) => c.method === 'GET' && c.path.endsWith('/orders/CMD-PAID')).length;
 await p.waitForTimeout(3500); assert.equal((await calls()).filter((c) => c.method === 'GET' && c.path.endsWith('/orders/CMD-PAID')).length, gets); ok('polling arrêté au statut final (' + gets + ' appels)');
-await p.getByRole('button', { name: 'Voir mes billets' }).click();
 assert.equal(await p.locator('.tk').count(), 2);
-assert.match(await p.locator('.tk').first().innerText(), /JCI-2026-000121[\s\S]*KOFFI AHOUSSOU[\s\S]*Standard[\s\S]*non transférable/);
+assert.match(await p.locator('.tk').first().innerText(), /JCI-2026-000121[\s\S]*Standard[\s\S]*Leadership[\s\S]*KOFFI AHOUSSOU[\s\S]*non transférable/);
 const hrefs = await p.locator('.tk').first().locator('a.btn').evaluateAll((a) => a.map((x) => [x.textContent.trim(), x.href, x.target, x.rel]));
-assert.deepEqual(hrefs.map((h) => h[0]), ['Image', 'PDF']); assert.ok(hrefs.every((h) => h[2] === '_blank' && /noopener/.test(h[3]))); ok('billets : Image / PDF, nouvel onglet noopener');
+assert.deepEqual(hrefs.map((h) => h[0]), ['Télécharger le PDF', 'Enregistrer l’image']); assert.ok(hrefs.every((h) => h[2] === '_blank' && /noopener/.test(h[3]))); ok('billets : PDF / image, nouvel onglet noopener');
 await p.screenshot({ path: `${OUT}/22-billets.png`, fullPage: true });
-await p.getByRole('button', { name: 'Commande' }).click(); await p.getByRole('link', { name: 'Retour à l’événement' }).click(); await p.waitForURL(B + '/evenements/leadership-impact'); ok('retour à l’événement (slug mémorisé)');
+await p.getByRole('link', { name: 'Retour à l’événement' }).click(); await p.waitForURL(B + '/evenements/leadership-impact'); ok('retour à l’événement (slug mémorisé)');
 
 // 2) échec → réessayer
 p = await open('CMD-FAIL', '', { slug: 'leadership-impact', email: 'k@e.bj' });
