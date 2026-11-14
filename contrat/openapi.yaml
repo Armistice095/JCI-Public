@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: JCI Comé Labs — API Événements & Billetterie
-  version: 0.12.0
+  version: 0.13.2
   description: |
     **Contrat v0.7.0 — uniquement ce qui est déjà en place côté backend** (50 routes). Les routes à venir sont listées
     dans `docs/GUIDE_FRONTEND.md` (section « Feuille de route »). Ce contrat est vérifié automatiquement contre les
@@ -39,7 +39,7 @@ tags:
   - { name: Contrôle d'accès, description: "Application JCI Stafs : scan des billets à l'entrée et compteurs de présence" }
   - { name: Participants, description: "Liste, recherche, filtres, export et fiche billet d'un participant (onglet « Participants »)" }
   - { name: Rapports, description: "Documents PDF d'un événement : liste des participants, rapport de billetterie, liste des présences, journal des paiements (onglet « Documents »)" }
-  - { name: Billets, description: "Fichiers des billets (PDF, image, visuel de partage) et renvoi par e-mail" }
+  - { name: Billets, description: "Fichiers des billets (PDF, image) et renvoi par e-mail" }
   - { name: Public, description: "Sans authentification : page publique, achat, suivi de commande" }
   - { name: Interne, description: "Ne pas appeler depuis une interface" }
 
@@ -689,15 +689,15 @@ paths:
   /tickets/{ticketId}/files/{kind}:
     get:
       tags: [Billets]
-      summary: Lien de téléchargement d'un billet (PDF, image) ou du visuel de partage
+      summary: Lien de téléchargement d'un billet (PDF ou image)
       description: |
         Renvoie une **URL signée valable 15 minutes** (à ouvrir ou télécharger immédiatement ; ne pas la stocker). Permission `participant.read` sur l'événement,
         ou le vendeur qui a enregistré la vente (pour remettre le billet en main propre).
-        `kind` : `pdf` (impression, 297 × 99,5 mm), `image` (PNG haute définition, pour téléphone), `share` (visuel « J'y serai ! » 1080 × 1920, sans QR code).
+        `kind` : `pdf` (impression, 297 × 99,5 mm), `image` (PNG haute définition, pour téléphone). Le visuel de partage « J'y serai ! » a été retiré en 0.13.0 : `share` répond désormais 422.
         **202** : fichiers pas encore générés (quelques secondes après un paiement ou une vente) → réessayer dans 2 à 3 secondes ; la génération est relancée automatiquement si besoin.
       parameters:
         - { $ref: '#/components/parameters/TicketId' }
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [pdf, image, share] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [pdf, image] } }
       responses:
         '200': { description: Lien prêt, content: { application/json: { schema: { $ref: '#/components/schemas/TicketFile' } } } }
         '202': { description: Fichiers en cours de génération, content: { application/json: { schema: { $ref: '#/components/schemas/TicketFilePending' } } } }
@@ -802,7 +802,7 @@ paths:
         À interroger **toutes les 3 secondes maximum** jusqu'à un statut final (`PAID`, `FAILED`, `EXPIRED`, `REFUND_REQUIRED`). À chaque appel, le serveur revérifie le paiement
         auprès du prestataire : les billets apparaissent même si une notification est en retard. `message` contient un texte prêt à afficher.
         Le `token` est un secret : le retirer de la barre d'adresse après lecture (`history.replaceState`) et servir la page avec `Referrer-Policy: no-referrer`.
-        Mauvais jeton et commande inconnue donnent la même réponse 404. Les billets (PDF, image, visuel de partage) sont téléchargeables via les liens de `tickets[]` dès que `filesReady` vaut `true`.
+        Mauvais jeton et commande inconnue donnent la même réponse 404. Les billets (PDF, image) sont téléchargeables via les liens de `tickets[]` dès que `filesReady` vaut `true`.
       security: []
       parameters:
         - { $ref: '#/components/parameters/Reference' }
@@ -1176,7 +1176,7 @@ components:
               sentAt: { type: string, format: date-time, nullable: true }
               lastEventAt: { type: string, format: date-time, nullable: true }
               createdAt: { type: string, format: date-time }
-        filesReady: { type: boolean, description: "PDF, image et visuel de partage générés (sinon `GET …/files/{kind}` répond 202)" }
+        filesReady: { type: boolean, description: "PDF et image générés (sinon `GET …/files/{kind}` répond 202)" }
     OrderChannel: { type: string, enum: [ONLINE, PHYSICAL] }
     OrderStatus:
       type: string
@@ -1669,12 +1669,19 @@ components:
             properties: { question: { type: string }, answer: { type: string } }
         og:
           type: object
-          required: [title, description, imageUrl]
-          description: Valeurs des balises Open Graph (aperçu WhatsApp / Facebook)
+          required: [title, description, imageUrl, imageWidth, imageHeight, imageType]
+          description: |
+            Valeurs des balises Open Graph (aperçu WhatsApp / Facebook).
+            `imageUrl` est une **variante légère 1200 × 630 (JPEG)** de l'affiche de couverture, créée à l'envoi de l'affiche : les applications de messagerie
+            ignorent les images trop lourdes. Pour une affiche plus ancienne sans variante, c'est l'affiche d'origine. Utiliser `imageWidth`, `imageHeight` et
+            `imageType` pour les balises `og:image:width`, `og:image:height` et `og:image:type`.
           properties:
             title: { type: string }
             description: { type: string }
             imageUrl: { type: string, format: uri, nullable: true }
+            imageWidth: { type: integer, nullable: true, example: 1200 }
+            imageHeight: { type: integer, nullable: true, example: 630 }
+            imageType: { type: string, nullable: true, example: image/jpeg }
     PublicOrderCreated:
       type: object
       required: [reference, accessToken, amountXof, reservedUntil, checkoutUrl]
@@ -1701,7 +1708,7 @@ components:
             les trois liens sont `null` (continuer d'interroger). Les liens sont des **URL signées valables 15 minutes** : ne pas les mettre en cache ; ils sont renouvelés à chaque appel.
           items:
             type: object
-            required: [number, holderName, category, filesReady, pdfUrl, imageUrl, shareVisualUrl]
+            required: [number, holderName, category, filesReady, pdfUrl, imageUrl]
             properties:
               number: { type: string, example: JCI-2026-000001 }
               holderName: { type: string }
@@ -1709,7 +1716,6 @@ components:
               filesReady: { type: boolean }
               pdfUrl: { type: string, format: uri, nullable: true, description: "Billet à imprimer (PDF)" }
               imageUrl: { type: string, format: uri, nullable: true, description: "Billet pour téléphone (PNG haute définition)" }
-              shareVisualUrl: { type: string, format: uri, nullable: true, description: "Visuel « J'y serai ! » à publier sur WhatsApp / Facebook (sans QR code)" }
     PublicTicket:
       type: object
       required: [eventTitle, startsAt, venueName, category, holderShortName, status]

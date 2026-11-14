@@ -70,7 +70,6 @@ URL contenant déjà `/api/v1` (ne pas l'y mettre), API éteinte ou inaccessible
 - **Limites actuelles de l'API** (la réponse de suivi ne contient ni l'événement, ni l'e-mail, ni la date/le lieu, ni le QR) : l'adresse e-mail et l'événement sont retrouvés grâce à une mémoire de **l'onglet** créée au moment de la commande ;
   ouverte depuis un autre appareil, la page n'affiche pas l'adresse et masque « Retour à l'événement », « Réessayer » et « Recommencer » (aucune destination connue). Les cartes de billets n'ont pas de QR code (il est dans l'image et le PDF).
   Demande au backend : ajouter `eventSlug` (+ date, heure, lieu, contact) à `PublicOrderStatus`.
-- Partage du visuel en pièce jointe (`navigator.share({ files })`) : renseigner `PUBLIC_FILES_ORIGIN` (origine du stockage, CSP) — et le CORS du stockage ; sinon le visuel s'ouvre dans un nouvel onglet.
 
 ## Étape 4 — Déploiement (Cloudflare Workers)
 

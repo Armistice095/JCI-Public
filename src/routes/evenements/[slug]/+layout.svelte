@@ -40,6 +40,15 @@
   <meta property="og:description" content={og.description} />
   <meta property="og:url" content={base} />
   <meta property="og:image" content={image} />
+  {#if og.imageUrl}
+    {#if og.imageWidth}<meta property="og:image:width" content={String(og.imageWidth)} />{/if}
+    {#if og.imageHeight}<meta property="og:image:height" content={String(og.imageHeight)} />{/if}
+    {#if og.imageType}<meta property="og:image:type" content={og.imageType} />{/if}
+  {:else}
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:type" content="image/png" />
+  {/if}
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content={og.title} />
   <meta name="twitter:description" content={og.description} />

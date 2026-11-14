@@ -23,7 +23,7 @@ const base = (o = {}) => ({
   practicalInfo: 'Ouverture des portes à 07h30.', ticketTerms: 'Billet personnel.', refundPolicy: 'Remboursement si annulation.',
   infoSources: { practicalInfo: 'event', ticketTerms: 'default', refundPolicy: 'default' },
   faq: [{ question: 'Infos pratiques', answer: 'Ouverture des portes à 07h30.' }, { question: 'Conditions d’utilisation du billet', answer: 'Billet personnel.' }, { question: 'Annulation et remboursement', answer: 'Remboursement si annulation.' }, { question: 'Combien de temps mes places sont-elles réservées ?', answer: '15 minutes.' }, { question: 'Puis-je acheter plusieurs billets ?', answer: 'Oui, 5 au maximum.' }],
-  og: { title: 'Leadership & Impact · JCI Comé Excellence', description: 'Samedi 28 novembre 2026 à Comé', imageUrl: `http://127.0.0.1:${PORT}/img/p1.svg` },
+  og: { title: 'Leadership & Impact · JCI Comé Excellence', description: 'Samedi 28 novembre 2026 à Comé', imageUrl: `http://127.0.0.1:${PORT}/img/p1.svg`, imageWidth: 1200, imageHeight: 630, imageType: 'image/jpeg' },
   ...o
 });
 const FIX = {
@@ -32,7 +32,7 @@ const FIX = {
   ended: base({ slug: 'ended', salesStatus: 'CLOSED', status: 'CLOSED' }),
   cancelled: base({ slug: 'cancelled', status: 'CANCELLED', salesStatus: 'CLOSED' }),
   soldout: base({ slug: 'soldout', categories: base().categories.map((c) => ({ ...c, availability: 'SOLD_OUT', remaining: 0 })) }),
-  minimal: base({ slug: 'minimal', accentColor: null, posters: [], faq: [], contactPhone: null, programme: [], organizers: [], description: '', og: { title: 'Minimal', description: 'd', imageUrl: null } }),
+  minimal: base({ slug: 'minimal', accentColor: null, posters: [], faq: [], contactPhone: null, programme: [], organizers: [], description: '', og: { title: 'Minimal', description: 'd', imageUrl: null, imageWidth: null, imageHeight: null, imageType: null } }),
   fresh: base({ slug: 'fresh' }),
   xss: base({ slug: 'xss', title: '<img src=x onerror=alert(1)>', description: '<script>window.__xss=1</script>', accentColor: 'red;background:url(x)' })
 };
@@ -54,7 +54,7 @@ http.createServer((req, res) => {
 }).listen(PORT, () => console.log('mock api on', PORT));
 const seen = new Map();
 const tk = (ready) => [1, 2].map((i) => ({ number: 'JCI-2026-00012' + i, holderName: i === 1 ? 'Koffi Ahoussou' : 'Afi Dossou', category: 'Standard', filesReady: ready,
-  pdfUrl: ready ? `http://127.0.0.1:${PORT}/files/t${i}.pdf?sig=abc` : null, imageUrl: ready ? `http://127.0.0.1:${PORT}/files/t${i}.png?sig=abc` : null, shareVisualUrl: ready ? `http://127.0.0.1:${PORT}/files/s${i}.jpg?sig=abc` : null }));
+  pdfUrl: ready ? `http://127.0.0.1:${PORT}/files/t${i}.pdf?sig=abc` : null, imageUrl: ready ? `http://127.0.0.1:${PORT}/files/t${i}.png?sig=abc` : null }));
 function orderStatus(ref, token) {
   const n = (seen.set(ref, (seen.get(ref) ?? 0) + 1), seen.get(ref));
   const base = { reference: ref, eventTitle: 'Leadership & Impact', amountXof: 6000, reservedUntil: new Date(Date.now() + 14 * 60000 + 30000).toISOString(), message: null, tickets: [] };

@@ -119,22 +119,6 @@
     goto(`/evenements/${memo.slug}/billets`);
   }
 
-  async function shareVisual(e: MouseEvent, url: string) {
-    if (typeof navigator.canShare !== 'function') return; // lien ouvert normalement (nouvel onglet)
-    e.preventDefault();
-    try {
-      const blob = await (await fetch(url)).blob(); // nécessite PUBLIC_FILES_ORIGIN (CSP) et le CORS du stockage
-      const file = new File([blob], 'jy-serai.jpg', { type: blob.type || 'image/jpeg' });
-      if (navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text: `J’y serai ! ${order?.eventTitle ?? ''}`, ...(memo ? { url: `${location.origin}/evenements/${memo.slug}` } : {}) });
-        return;
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return; // partage annulé
-    }
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
-
   const shareEventLink = () => memo && shareEvent({ title: order?.eventTitle ?? '' }, `${location.origin}/evenements/${memo.slug}`);
 </script>
 
@@ -193,7 +177,6 @@
             {#if t.filesReady}
               <a class="btn" href={t.imageUrl} target="_blank" rel="noopener noreferrer">Image</a>
               <a class="btn" href={t.pdfUrl} target="_blank" rel="noopener noreferrer">PDF</a>
-              <a class="btn f" href={t.shareVisualUrl} target="_blank" rel="noopener noreferrer" onclick={(e) => shareVisual(e, t.shareVisualUrl!)}>Partager sur WhatsApp</a>
             {:else}
               <span class="btn off">Image</span><span class="btn off">PDF</span>
             {/if}
@@ -288,6 +271,5 @@
   .tk .cn { font-size: 12px; color: #5d5a78; margin: 12px 0 0; text-align: center; }
   .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 20px 20px; }
   .acts .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 10px; font: 700 14px var(--font); background: #fff; color: #16103f; border: 1.5px solid #16103f; border-radius: 12px; text-decoration: none; }
-  .acts .btn.f { grid-column: 1 / -1; }
   .acts .btn.off { opacity: 0.45; }
 </style>

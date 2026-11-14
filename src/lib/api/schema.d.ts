@@ -2015,10 +2015,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Lien de téléchargement d'un billet (PDF, image) ou du visuel de partage
+         * Lien de téléchargement d'un billet (PDF ou image)
          * @description Renvoie une **URL signée valable 15 minutes** (à ouvrir ou télécharger immédiatement ; ne pas la stocker). Permission `participant.read` sur l'événement,
          *     ou le vendeur qui a enregistré la vente (pour remettre le billet en main propre).
-         *     `kind` : `pdf` (impression, 297 × 99,5 mm), `image` (PNG haute définition, pour téléphone), `share` (visuel « J'y serai ! » 1080 × 1920, sans QR code).
+         *     `kind` : `pdf` (impression, 297 × 99,5 mm), `image` (PNG haute définition, pour téléphone). Le visuel de partage « J'y serai ! » a été retiré en 0.13.0 : `share` répond désormais 422.
          *     **202** : fichiers pas encore générés (quelques secondes après un paiement ou une vente) → réessayer dans 2 à 3 secondes ; la génération est relancée automatiquement si besoin.
          */
         get: {
@@ -2027,7 +2027,7 @@ export interface paths {
                 header?: never;
                 path: {
                     ticketId: components["parameters"]["TicketId"];
-                    kind: "pdf" | "image" | "share";
+                    kind: "pdf" | "image";
                 };
                 cookie?: never;
             };
@@ -2342,7 +2342,7 @@ export interface paths {
          * @description À interroger **toutes les 3 secondes maximum** jusqu'à un statut final (`PAID`, `FAILED`, `EXPIRED`, `REFUND_REQUIRED`). À chaque appel, le serveur revérifie le paiement
          *     auprès du prestataire : les billets apparaissent même si une notification est en retard. `message` contient un texte prêt à afficher.
          *     Le `token` est un secret : le retirer de la barre d'adresse après lecture (`history.replaceState`) et servir la page avec `Referrer-Policy: no-referrer`.
-         *     Mauvais jeton et commande inconnue donnent la même réponse 404. Les billets (PDF, image, visuel de partage) sont téléchargeables via les liens de `tickets[]` dès que `filesReady` vaut `true`.
+         *     Mauvais jeton et commande inconnue donnent la même réponse 404. Les billets (PDF, image) sont téléchargeables via les liens de `tickets[]` dès que `filesReady` vaut `true`.
          */
         get: {
             parameters: {
@@ -2893,7 +2893,7 @@ export interface components {
                 /** Format: date-time */
                 createdAt: string;
             }[];
-            /** @description PDF, image et visuel de partage générés (sinon `GET …/files/{kind}` répond 202) */
+            /** @description PDF et image générés (sinon `GET …/files/{kind}` répond 202) */
             filesReady: boolean;
         };
         /** @enum {string} */
@@ -3503,12 +3503,23 @@ export interface components {
                 question: string;
                 answer: string;
             }[];
-            /** @description Valeurs des balises Open Graph (aperçu WhatsApp / Facebook) */
+            /**
+             * @description Valeurs des balises Open Graph (aperçu WhatsApp / Facebook).
+             *     `imageUrl` est une **variante légère 1200 × 630 (JPEG)** de l'affiche de couverture, créée à l'envoi de l'affiche : les applications de messagerie
+             *     ignorent les images trop lourdes. Pour une affiche plus ancienne sans variante, c'est l'affiche d'origine. Utiliser `imageWidth`, `imageHeight` et
+             *     `imageType` pour les balises `og:image:width`, `og:image:height` et `og:image:type`.
+             */
             og: {
                 title: string;
                 description: string;
                 /** Format: uri */
                 imageUrl: string | null;
+                /** @example 1200 */
+                imageWidth: number | null;
+                /** @example 630 */
+                imageHeight: number | null;
+                /** @example image/jpeg */
+                imageType: string | null;
             };
         };
         PublicOrderCreated: {
@@ -3560,11 +3571,6 @@ export interface components {
                  * @description Billet pour téléphone (PNG haute définition)
                  */
                 imageUrl: string | null;
-                /**
-                 * Format: uri
-                 * @description Visuel « J'y serai ! » à publier sur WhatsApp / Facebook (sans QR code)
-                 */
-                shareVisualUrl: string | null;
             }[];
         };
         PublicTicket: {

@@ -15,6 +15,8 @@ assert.equal(await p.locator('a.card[href="/evenements/soldout"]').locator('text
 assert.equal(await p.locator('a.card[href="/evenements/soon"]').locator('text=Bientôt ouverte').count(), 1); ok('bientôt ouverte');
 assert.ok((await p.locator('a.card').first().innerText()).includes('À partir de')); ok('prix « À partir de »');
 assert.match(await p.locator('link[rel=canonical]').getAttribute('href'), /\/$/); ok('canonical');
+const html = await (await fetch(B + '/evenements/leadership-impact')).text();
+assert.match(html, /og:image:width" content="1200"/); assert.match(html, /og:image:height" content="630"/); assert.match(html, /og:image:type" content="image\/jpeg"/); ok('aperçu du lien : og:image + dimensions + type (rendu serveur)');
 await p.locator('a.card[href="/evenements/leadership-impact"]').click();
 await p.waitForURL('**/evenements/leadership-impact'); ok('clic → page événement');
 

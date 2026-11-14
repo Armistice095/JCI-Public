@@ -41,10 +41,8 @@ await p.getByRole('button', { name: 'Voir mes billets' }).click();
 assert.equal(await p.locator('.tk').count(), 2);
 assert.match(await p.locator('.tk').first().innerText(), /JCI-2026-000121[\s\S]*KOFFI AHOUSSOU[\s\S]*Standard[\s\S]*non transférable/);
 const hrefs = await p.locator('.tk').first().locator('a.btn').evaluateAll((a) => a.map((x) => [x.textContent.trim(), x.href, x.target, x.rel]));
-assert.deepEqual(hrefs.map((h) => h[0]), ['Image', 'PDF', 'Partager sur WhatsApp']); assert.ok(hrefs.every((h) => h[2] === '_blank' && /noopener/.test(h[3]))); ok('billets : Image / PDF / partage, nouvel onglet noopener');
+assert.deepEqual(hrefs.map((h) => h[0]), ['Image', 'PDF']); assert.ok(hrefs.every((h) => h[2] === '_blank' && /noopener/.test(h[3]))); ok('billets : Image / PDF, nouvel onglet noopener');
 await p.screenshot({ path: `${OUT}/22-billets.png`, fullPage: true });
-const pop = ctx.waitForEvent('page'); await p.locator('.tk').first().getByText('Partager sur WhatsApp').click(); const np = await pop; await np.waitForURL(/files/);
-assert.match(np.url(), /\/files\/s1\.jpg/); ok('partage : repli en nouvel onglet quand le partage de fichier n’est pas possible'); await np.close();
 await p.getByRole('button', { name: 'Commande' }).click(); await p.getByRole('link', { name: 'Retour à l’événement' }).click(); await p.waitForURL(B + '/evenements/leadership-impact'); ok('retour à l’événement (slug mémorisé)');
 
 // 2) échec → réessayer
