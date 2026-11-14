@@ -20,7 +20,7 @@ async function recap(script) {
 // A) jeton très lent (17 s : l'ancien délai de 15 s échouait)
 let { ctx, p } = await recap(`window.turnstile = { render(el, o) { setTimeout(() => o.callback('TOK-slow'), 17000); return 'w'; }, reset() {}, remove() {} };`);
 await p.getByRole('button', { name: /^Payer/ }).first().click();
-await p.getByRole('button', { name: 'Vérification…' }).first().waitFor();
+await p.getByRole('button', { name: 'Vérification…' }).first().waitFor(); assert.equal(await p.locator('button .sp:visible').count(), 1); ok('pastille de chargement (spinner) dans le bouton Payer');
 await p.waitForSelector('#fed', { timeout: 30000 }); ok('jeton lent (17 s) : le paiement aboutit, bouton « Vérification… » pendant l’attente'); await ctx.close();
 
 // B) Cloudflare demande une action : le widget est montré et amené à l'écran, puis le paiement part

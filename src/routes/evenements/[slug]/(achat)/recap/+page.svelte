@@ -213,7 +213,7 @@
       <h3>Votre commande</h3>
       {#each co.lines as l}<div class="sum"><div><b>{l.cat.name}</b><small>{l.n} × {formatXof(l.cat.priceXof)}</small></div><b>{formatXof(l.cat.priceXof * l.n)}</b></div>{/each}
       <div class="sum t"><span>Total</span><b>{formatXof(co.total)}</b></div>
-      <Button type="submit" form="f2" block disabled={loading || !accepted} aria-busy={loading}>
+      <Button type="submit" form="f2" block {loading} disabled={loading || !accepted}>
         {#if loading}{waiting ? 'Vérification…' : 'Redirection…'}{:else}<Icon name="lock" />Payer {formatXof(co.total)}{/if}
       </Button>
       {#if !accepted}<p class="need">Acceptez les conditions pour continuer.</p>{/if}
@@ -227,7 +227,7 @@
   <div class="mbar">
     <BottomBar>
       <div><small>Total</small><strong>{formatXof(co.total)}</strong></div>
-      <Button type="submit" form="f2" disabled={loading || !accepted} aria-busy={loading}>{loading ? (waiting ? 'Vérification…' : 'Redirection…') : 'Payer'}</Button>
+      <Button type="submit" form="f2" {loading} disabled={loading || !accepted}>{loading ? (waiting ? 'Vérification…' : 'Redirection…') : 'Payer'}</Button>
     </BottomBar>
     {#if !accepted}<p class="need nb">Acceptez les conditions pour continuer.</p>{/if}
   </div>

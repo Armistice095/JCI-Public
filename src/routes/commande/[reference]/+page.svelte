@@ -152,7 +152,7 @@
       </p>
       {#if problem}<div class="ban" role="alert">{problem}</div>{/if}
       <div class="stack">
-        <Button block onclick={retry} disabled={busy} aria-busy={busy}>{busy ? 'Redirection…' : 'Réessayer le paiement'}</Button>
+        <Button block onclick={retry} loading={busy} disabled={busy}>{busy ? 'Redirection…' : 'Réessayer le paiement'}</Button>
         {#if slugHome}<Button outline block href={slugHome}>Retour à l’événement</Button>{/if}
       </div>
     </div>
@@ -232,7 +232,7 @@
       {#if left !== null && left > 0}<p>Places réservées encore <b class="cd">{mmss(left)}</b></p>{/if}
       {#if problem}<div class="ban" role="alert">{problem}</div>{/if}
       <div class="stack">
-        {#if canRetry}<Button block onclick={retry} disabled={busy} aria-busy={busy}>{busy ? 'Redirection…' : 'Réessayer le paiement'}</Button>{/if}
+        {#if canRetry}<Button block onclick={retry} loading={busy} disabled={busy}>{busy ? 'Redirection…' : 'Réessayer le paiement'}</Button>{/if}
         {#if !canRetry && memo}<Button block onclick={restart}>Recommencer ma commande</Button>{/if}
         {#if contact}<Button outline block href={contact} target="_blank">Contacter l’organisation</Button>{/if}
       </div>
