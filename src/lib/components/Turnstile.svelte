@@ -2,7 +2,10 @@
   import { onMount } from 'svelte';
   import { loadTurnstile } from '$lib/turnstile';
 
-  let { siteKey, ontoken, onerror }: { siteKey: string; ontoken: (t: string | null) => void; onerror: () => void } = $props();
+  let { siteKey, ontoken, onerror, oninteractive, onafter, appearance = 'interaction-only' }: {
+    siteKey: string; ontoken: (t: string | null) => void; onerror: (code?: string) => void;
+    oninteractive?: () => void; onafter?: () => void; appearance?: 'interaction-only' | 'always';
+  } = $props();
   let el: HTMLDivElement;
   let id: string | undefined;
 
@@ -16,14 +19,18 @@
     loadTurnstile()
       .then((t) => {
         if (gone) return;
-        // « interaction-only » : invisible, sauf si Cloudflare demande une action à l'acheteur.
+        // « interaction-only » : invisible, sauf si Cloudflare demande une action à l'acheteur (on l'amène alors à l'écran).
         id = t.render(el, {
           sitekey: siteKey,
-          appearance: 'interaction-only',
+          appearance,
+          retry: 'auto',
+          'refresh-expired': 'auto',
           language: 'fr',
           callback: (tok: string) => ontoken(tok),
           'expired-callback': () => ontoken(null),
-          'error-callback': () => { ontoken(null); onerror(); }
+          'before-interactive-callback': () => oninteractive?.(),
+          'after-interactive-callback': () => onafter?.(),
+          'error-callback': (code?: string) => { ontoken(null); onerror(code ? String(code) : undefined); return true; }
         });
       })
       .catch(() => onerror());

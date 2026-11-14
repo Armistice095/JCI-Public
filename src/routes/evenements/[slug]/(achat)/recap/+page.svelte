@@ -29,6 +29,12 @@
   let problem = $state<{ message: string; action?: { label: string; href: string } } | null>(null);
   let token: string | null = null;
   let tokenError = false;
+  let errorCode = '';
+  /** Cloudflare demande une action à l'acheteur : le widget est alors montré et amené à l'écran. */
+  let interactive = $state(false);
+  let widgetMode = $state<'interaction-only' | 'always'>('interaction-only');
+  let waiting = $state(false);
+  let capEl: HTMLDivElement | undefined = $state();
   let ts: { reset: () => void } | undefined = $state();
 
   onMount(() => {
@@ -42,15 +48,31 @@
     return () => removeEventListener('pageshow', back);
   });
 
-  /** Attend le jeton Turnstile (invisible la plupart du temps). Sans clé configurée : pas de captcha (développement). */
+  /** Attend le jeton Turnstile : invisible la plupart du temps ; sur réseau lent ou si Cloudflare demande une action, on laisse le temps et on montre le widget. */
   async function captcha(): Promise<string | undefined> {
     if (!siteKey) return undefined;
-    for (let i = 0; i < 75; i++) {
-      if (token) return token;
-      if (tokenError) throw new ApiError(400, 'CAPTCHA_FAILED', 'La vérification anti-robot n’a pas pu se charger. Rechargez la page et réessayez.');
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    throw new ApiError(400, 'CAPTCHA_FAILED', 'La vérification anti-robot prend trop de temps. Réessayez.');
+    const start = Date.now();
+    waiting = true;
+    try {
+      for (;;) {
+        if (token) return token;
+        if (tokenError) {
+          widgetMode = 'always'; interactive = true;
+          throw new ApiError(400, 'CAPTCHA_FAILED', `La vérification anti-robot n’a pas pu aboutir${errorCode ? ` (code ${errorCode})` : ''}. Vérifiez votre connexion, puis réessayez.`);
+        }
+        const limit = interactive ? 180_000 : 40_000; // plus long quand l'acheteur doit agir
+        if (Date.now() - start > limit) {
+          widgetMode = 'always'; interactive = true; tokenError = false;
+          throw new ApiError(400, 'CAPTCHA_FAILED', 'La vérification de sécurité est lente. Terminez-la dans le cadre ci-dessous, puis appuyez de nouveau sur Payer.');
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    } finally { waiting = false; }
+  }
+
+  function showWidget() {
+    interactive = true;
+    queueMicrotask(() => capEl?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
 
   async function pay(ev: SubmitEvent) {
@@ -75,7 +97,7 @@
       location.assign(url);
     } catch (e) {
       loading = false;
-      token = null; ts?.reset(); // un jeton Turnstile ne sert qu'une fois
+      token = null; ts?.reset(); tokenError = false; // un jeton Turnstile ne sert qu'une fois
       fail(e instanceof ApiError ? e : new ApiError(0, 'UNKNOWN', 'Une erreur est survenue. Réessayez dans un instant.'));
     }
   }
@@ -175,7 +197,15 @@
       </form>
 
       {#if siteKey}
-        <Turnstile bind:this={ts} {siteKey} ontoken={(t) => { token = t; if (t) tokenError = false; }} onerror={() => (tokenError = true)} />
+        <div class="cap" class:show={interactive} bind:this={capEl}>
+          {#if interactive}<p class="caph"><Icon name="lock" />Une vérification rapide est nécessaire : cochez la case ci-dessous, puis appuyez sur Payer.</p>{/if}
+          {#key widgetMode}
+            <Turnstile bind:this={ts} {siteKey} appearance={widgetMode}
+              ontoken={(t) => { token = t; if (t) { tokenError = false; errorCode = ''; } }}
+              onerror={(c) => { tokenError = true; errorCode = c ?? ''; }}
+              oninteractive={showWidget} onafter={() => { if (token) interactive = false; }} />
+          {/key}
+        </div>
       {/if}
     </div>
 
@@ -184,7 +214,7 @@
       {#each co.lines as l}<div class="sum"><div><b>{l.cat.name}</b><small>{l.n} × {formatXof(l.cat.priceXof)}</small></div><b>{formatXof(l.cat.priceXof * l.n)}</b></div>{/each}
       <div class="sum t"><span>Total</span><b>{formatXof(co.total)}</b></div>
       <Button type="submit" form="f2" block disabled={loading || !accepted} aria-busy={loading}>
-        {#if loading}Redirection…{:else}<Icon name="lock" />Payer {formatXof(co.total)}{/if}
+        {#if loading}{waiting ? 'Vérification…' : 'Redirection…'}{:else}<Icon name="lock" />Payer {formatXof(co.total)}{/if}
       </Button>
       {#if !accepted}<p class="need">Acceptez les conditions pour continuer.</p>{/if}
       <ul class="notes">
@@ -197,7 +227,7 @@
   <div class="mbar">
     <BottomBar>
       <div><small>Total</small><strong>{formatXof(co.total)}</strong></div>
-      <Button type="submit" form="f2" disabled={loading || !accepted} aria-busy={loading}>{loading ? 'Redirection…' : 'Payer'}</Button>
+      <Button type="submit" form="f2" disabled={loading || !accepted} aria-busy={loading}>{loading ? (waiting ? 'Vérification…' : 'Redirection…') : 'Payer'}</Button>
     </BottomBar>
     {#if !accepted}<p class="need nb">Acceptez les conditions pour continuer.</p>{/if}
   </div>
@@ -257,6 +287,10 @@
   .chk input:focus-visible + .box { outline: 3px solid var(--acc); outline-offset: 2px; }
   .chk .t { font-weight: 600; }
   .chk a { color: var(--acc); }
+  .cap { margin: 0; scroll-margin-bottom: 140px; }
+  .cap.show { border: 1px solid var(--line); border-radius: 16px; padding: 16px; background: var(--soft); }
+  .caph { margin: 0 0 12px; display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--ink); font-weight: 600; }
+  .caph :global(svg) { width: 18px; height: 18px; color: var(--acc); flex: none; margin-top: 1px; }
   .need { margin: 10px 0 0; text-align: center; color: var(--mut); font-size: 13px; }
   .nb { position: fixed; inset: auto 0 calc(78px + env(safe-area-inset-bottom, 0px)) 0; margin: 0; z-index: 9; background: var(--bg); padding: 6px 0 0; }
   .notes { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; color: var(--mut); font-size: 14px; }
