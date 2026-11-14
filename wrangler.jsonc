@@ -16,7 +16,7 @@
   // à renseigner aussi dans Cloudflare > Workers > Settings > Variables and Secrets > « Build ».
   "vars": {
     "PUBLIC_API_URL": "https://api.jcicomee.org",
-    "PUBLIC_TURNSTILE_SITE_KEY": "",
+    "PUBLIC_TURNSTILE_SITE_KEY": "0x4AAAAAAF98jz4ebThUWpJh",
     "PUBLIC_SITE_URL": "https://jcicomee.org"
   }
 }

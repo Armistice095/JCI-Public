@@ -16,7 +16,7 @@
 <svelte:head><meta name="robots" content="noindex" /></svelte:head>
 
 <Header homeHref={home} secure />
-<main class:wide={/\/(recap|coordonnees)$/.test(page.url.pathname)}>{@render children()}</main>
+<main class:wide={/\/(billets|recap|coordonnees)$/.test(page.url.pathname)}>{@render children()}</main>
 
 <style>
   main { max-width: 560px; margin: auto; }
